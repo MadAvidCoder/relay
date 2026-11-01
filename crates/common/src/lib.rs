@@ -3,9 +3,23 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Message {
-    Auth { user_id: String },
-    Chat { user_id: String, message: String },
-    Ack { user_id: String, timestamp: u64 },
+    Auth {
+        user_id: String,
+    },
+    SendMessage {
+        message: String,
+        recipient_id: String,
+    },
+    NewMessage {
+        user_id: String,
+        recipient_id: String,
+        message: String,
+        timestamp: u64,
+    },
+    Ack {
+        user_id: String,
+        timestamp: u64,
+    },
 }
 
 impl Message {

@@ -22,19 +22,17 @@ async fn handle_socket(mut socket: WebSocket, tx_bus: broadcast::Sender<Message>
                                 continue;
                             }
                         };
-                        match &decoded {
+                        match decoded {
                             Message::Auth { user_id } => {
                                 println!("User {} connected", user_id);
                                 id = Some(user_id.clone());
                             }
-                            Message::Chat { user_id, .. } => {
-                                if id.is_none() || id.as_deref() != Some(user_id) {
-                                    // Must be logged in as the user sending the message
-                                    continue;
-                                }
-                                tx_bus.send(decoded).unwrap_or(0);
+                            Message::SendMessage { message, recipient_id } => {
+                                if let Some(ref user_id) = id {
+                                    tx_bus.send(Message::NewMessage { user_id: user_id.clone(), recipient_id, message, timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() }).unwrap_or(0);
+                                };
                             }
-                            Message::Ack { .. } => {}
+                            _ => {}
                         }
                     }
                 } else {
@@ -49,11 +47,8 @@ async fn handle_socket(mut socket: WebSocket, tx_bus: broadcast::Sender<Message>
                             if id.is_none() {
                                 continue;
                             }
-                            if let Message::Chat { user_id, .. } = &msg {
-                                    if id.as_deref() == Some(user_id) {
-                                        // Don't resend self
-                                        continue;
-                                    }
+                            if let Message::NewMessage { recipient_id, .. } = &msg && id.as_deref() == Some(recipient_id) {
+                                // Don't resend self
                                 socket.send(msg.to_json().unwrap_or_default().into()).await.unwrap_or(());
                             }
                         }
