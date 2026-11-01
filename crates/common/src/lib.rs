@@ -1,28 +1,127 @@
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+#[derive(Debug, Clone, PartialEq)]
+struct User {
+    id: Uuid,
+    username: String,
+}
+impl User {
+    fn new(username: String) -> Self {
+        User {
+            id: Uuid::now_v7(),
+            username,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct Connection {
+    id: Uuid,
+    user_id: Uuid,
+}
+impl Connection {
+    fn new(user_id: Uuid) -> Self {
+        Connection {
+            id: Uuid::now_v7(),
+            user_id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct Message {
+    id: Uuid,
+    sender_id: Uuid,
+    recipient_id: Uuid,
+    content: String,
+    timestamp: u64,
+}
+impl Message {
+    fn new(sender_id: Uuid, recipient_id: Uuid, content: String) -> Self {
+        Message {
+            id: Uuid::now_v7(),
+            sender_id,
+            recipient_id,
+            content,
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+        }
+    }
+    fn new_with_timestamp(
+        sender_id: Uuid,
+        recipient_id: Uuid,
+        content: String,
+        timestamp: u64,
+    ) -> Self {
+        Message {
+            id: Uuid::now_v7(),
+            sender_id,
+            recipient_id,
+            content,
+            timestamp,
+        }
+    }
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum Message {
-    Auth {
-        user_id: String,
+pub enum ClientProtocol {
+    Auth { user_id: Uuid },
+    SendMessage { message: String, recipient_id: Uuid },
+}
+impl ClientProtocol {
+    pub fn to_json(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string(self)
+    }
+
+    pub fn from_json(json_str: &str) -> Result<Self, serde_json::Error> {
+        serde_json::from_str(json_str)
+    }
+}
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub enum AuthError {
+    InvalidCredentials,
+    UserNotFound,
+    Unauthorized,
+    UnknownError,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub enum ErrorCodes {
+    InvalidRequest,
+    InternalError,
+    UnknownError,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ServerProtocol {
+    AuthSuccess {
+        user_id: Uuid,
+        timestamp: u64,
     },
-    SendMessage {
-        message: String,
-        recipient_id: String,
+    AuthFailure {
+        user_id: Uuid,
+        reason: AuthError,
+        timestamp: u64,
     },
     NewMessage {
-        user_id: String,
-        recipient_id: String,
+        message_id: Uuid,
+        sender_id: Uuid,
+        recipient_id: Uuid,
         message: String,
         timestamp: u64,
     },
-    Ack {
-        user_id: String,
+    Error {
+        error_code: ErrorCodes,
         timestamp: u64,
     },
 }
 
-impl Message {
+impl ServerProtocol {
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
         serde_json::to_string(self)
     }
