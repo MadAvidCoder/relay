@@ -2,12 +2,12 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq)]
-struct User {
-    id: Uuid,
-    username: String,
+pub struct User {
+    pub id: Uuid,
+    pub username: String,
 }
 impl User {
-    fn new(username: String) -> Self {
+    pub fn new(username: String) -> Self {
         User {
             id: Uuid::now_v7(),
             username,
@@ -16,12 +16,12 @@ impl User {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-struct Connection {
-    id: Uuid,
-    user_id: Uuid,
+pub struct Connection {
+    pub id: Uuid,
+    pub user_id: Uuid,
 }
 impl Connection {
-    fn new(user_id: Uuid) -> Self {
+    pub fn new(user_id: Uuid) -> Self {
         Connection {
             id: Uuid::now_v7(),
             user_id,
@@ -30,15 +30,15 @@ impl Connection {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-struct Message {
-    id: Uuid,
-    sender_id: Uuid,
-    recipient_id: Uuid,
-    content: String,
-    timestamp: u64,
+pub struct Message {
+    pub id: Uuid,
+    pub sender_id: Uuid,
+    pub recipient_id: Uuid,
+    pub content: String,
+    pub timestamp: u64,
 }
 impl Message {
-    fn new(sender_id: Uuid, recipient_id: Uuid, content: String) -> Self {
+    pub fn new(sender_id: Uuid, recipient_id: Uuid, content: String) -> Self {
         Message {
             id: Uuid::now_v7(),
             sender_id,
@@ -50,7 +50,7 @@ impl Message {
                 .as_secs(),
         }
     }
-    fn new_with_timestamp(
+    pub fn new_with_timestamp(
         sender_id: Uuid,
         recipient_id: Uuid,
         content: String,
@@ -91,7 +91,9 @@ pub enum AuthError {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum ErrorCodes {
+    NotAuthenticated,
     InvalidRequest,
+    RecipientNotFound,
     InternalError,
     UnknownError,
 }
