@@ -1,83 +1,142 @@
+mod connection_manager;
+
+use connection_manager::ConnectionManager;
+use relay_common::{AuthError, ClientProtocol, ServerProtocol};
+use std::sync::Arc;
+use tokio::sync::RwLock;
+
 use axum::{
     Router,
-    extract::{State, WebSocketUpgrade, ws::WebSocket},
+    extract::{
+        State, WebSocketUpgrade,
+        ws::{Message, WebSocket},
+    },
     response::Response,
-    routing::any,
+    routing::{any, get},
 };
-use relay_common::Message;
-use tokio::{net::TcpListener, sync::broadcast};
+use tokio::net::TcpListener;
 
-async fn handle_socket(mut socket: WebSocket, tx_bus: broadcast::Sender<Message>) {
-    let mut rx_bus = tx_bus.subscribe();
-    let mut id: Option<String> = None;
+async fn handle_socket(mut socket: WebSocket, state: AppState) {
+    let (conns_tx, mut conns_rx) = tokio::sync::mpsc::channel::<ServerProtocol>(16);
+    let mut user_id: Option<uuid::Uuid> = None;
+    let mut conn_id: Option<uuid::Uuid> = None;
     loop {
         tokio::select! {
+            msg = conns_rx.recv() => {
+                match msg {
+                    Some(msg) => {
+                        if let Err(e) = socket.send(Message::Text(msg.to_json().unwrap_or("".into()).into())).await {
+                            eprintln!("Error sending message to client: {:?}", e);
+                            break;
+                        }
+                    },
+                    None => {
+                        eprintln!("Connection manager channel closed.");
+                        break;
+                    }
+                }
+            }
             msg = socket.recv() => {
-                if let Some(msg) = msg {
-                    if let Ok(msg) = msg {
-                        let decoded = match msg.to_text().map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e)).and_then(|text| Message::from_json(text).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))) {
-                            Ok(decoded) => decoded,
-                            Err(e) => {
-                                eprintln!("Error decoding message: {:?}", e);
-                                continue;
+                match msg {
+                    Some(Ok(msg)) => match msg {
+                        Message::Text(text) => {
+                            match ClientProtocol::from_json(&text) {
+                                Ok(client_msg) => {
+                                    match client_msg {
+                                        ClientProtocol::Auth { user_id: recv_user_id } => {
+                                            if user_id.is_some() {
+                                                eprintln!("User is already authenticated. Ignoring auth request.");
+                                                continue;
+                                            }
+                                            let connection = relay_common::Connection::new(recv_user_id);
+                                            conn_id = Some(connection.id);
+                                            let active_connection = connection_manager::ActiveConnection {
+                                                connection: connection.clone(),
+                                                sender: conns_tx.clone(),
+                                            };
+                                            let mut conns_perms = state.conns.write().await;
+                                            let res = conns_perms.register(recv_user_id, active_connection);
+                                            drop(conns_perms);
+                                            match res {
+                                                Ok(_) => {
+                                                    user_id = Some(recv_user_id);
+                                                    socket.send(Message::Text(ServerProtocol::AuthSuccess { user_id: recv_user_id, timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() }.to_json().unwrap_or("".into()).into())).await.unwrap_or_else(|e| {
+                                                        eprintln!("Error sending auth success message to client: {:?}", e);
+                                                    });
+                                                }
+                                                Err(e) => {
+                                                    eprintln!("Error registering connection: {:?}", e);
+                                                    socket.send(Message::Text(ServerProtocol::AuthFailure { user_id: recv_user_id, reason: AuthError::UnknownError, timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() }.to_json().unwrap_or("".into()).into())).await.unwrap_or_else(|e| {
+                                                        eprintln!("Error sending auth failure message to client: {:?}", e);
+                                                    });
+                                                }
+                                            }
+                                        }
+                                        ClientProtocol::SendMessage { message, recipient_id } => {
+                                            if user_id.is_none() {
+                                                eprintln!("User is not authenticated. Cannot send message.");
+                                                continue;
+                                            }
+                                            let sender_id = user_id.unwrap();
+                                            let msg = relay_common::Message::new(sender_id, recipient_id, message);
+                                            let state_read = state.conns.read().await;
+                                            let sender = state_read.get(recipient_id).map(|recipient_conn| recipient_conn.sender.clone());
+                                            drop(state_read);
+                                            if let Some(sender) = sender {
+                                                sender.send(ServerProtocol::NewMessage { message_id: msg.id, sender_id: msg.sender_id, recipient_id: msg.recipient_id, message: msg.content, timestamp: msg.timestamp }).await.unwrap_or_else(|e| {
+                                                    eprintln!("Error sending message to recipient: {:?}", e);
+                                                });
+
+                                            } else {
+                                                eprintln!("Recipient is not connected. Cannot send message.");
+                                            }
+
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!("Error parsing client message: {:?}", e);
+                                }
                             }
-                        };
-                        match decoded {
-                            Message::Auth { user_id } => {
-                                println!("User {} connected", user_id);
-                                id = Some(user_id.clone());
-                            }
-                            Message::SendMessage { message, recipient_id } => {
-                                if let Some(ref user_id) = id {
-                                    tx_bus.send(Message::NewMessage { user_id: user_id.clone(), recipient_id, message, timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() }).unwrap_or(0);
-                                };
-                            }
-                            _ => {}
                         }
-                    }
-                } else {
-                    // WS closed
-                    break;
-                }
-            },
-            msg = rx_bus.recv() => {
-                if id.is_some() {
-                    match msg {
-                        Ok(msg) => {
-                            if id.is_none() {
-                                continue;
-                            }
-                            if let Message::NewMessage { recipient_id, .. } = &msg && id.as_deref() == Some(recipient_id) {
-                                // Don't resend self
-                                socket.send(msg.to_json().unwrap_or_default().into()).await.unwrap_or(());
-                            }
+                        Message::Close(frame) => {
+                            println!("Client disconnected: {:?}", frame);
+                            break;
                         }
-                        Err(broadcast::error::RecvError::Lagged(_)) => eprintln!("Lagged :("),
-                        Err(broadcast::error::RecvError::Closed) => break,
+                        _ => {}
+                    },
+                    _ => {
+                        println!("Client disconnected or error occurred.");
+                        break;
                     }
                 }
-            },
-        };
+            }
+        }
+    }
+    if let (Some(uid), Some(conn_id)) = (user_id, conn_id) {
+        let mut state_write_perms = state.conns.write().await;
+        state_write_perms.remove(uid, conn_id).unwrap_or_else(|e| {
+            eprintln!("Error removing connection: {:?}", e);
+        });
     }
 }
 
 async fn handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
-    let tx = state.bus_tx.clone();
-    ws.on_upgrade(move |ws| handle_socket(ws, tx))
+    ws.on_upgrade(move |ws| handle_socket(ws, state))
 }
 
 #[derive(Debug, Clone)]
 struct AppState {
-    bus_tx: broadcast::Sender<Message>,
+    conns: Arc<RwLock<ConnectionManager>>,
 }
 
 #[tokio::main]
 async fn main() {
-    let (tx_bus, _) = broadcast::channel(32);
-
     let app: Router = Router::new()
-        .route("/ws", any(handler))
-        .with_state(AppState { bus_tx: tx_bus });
+        .route("/ws", get(handler))
+        .with_state(AppState {
+            conns: Arc::new(RwLock::new(ConnectionManager::new())),
+        });
     let listener = TcpListener::bind("127.0.0.1:3000").await.unwrap();
     println!("Listening on 127.0.0.1:3000");
 

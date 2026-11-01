@@ -867,6 +867,7 @@ dependencies = [
  "axum",
  "relay-common",
  "tokio 1.54.1",
+ "uuid",
 ]
 
 [[package]]
