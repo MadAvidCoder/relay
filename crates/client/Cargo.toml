@@ -1,6 +1,12 @@
 [package]
-name = "client"
-version = "0.1.0"
-edition = "2024"
+name = "relay"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 
 [dependencies]
+future-utils = "0.12.1"
+futures-util = "0.3.34"
+relay-common.workspace = true
+tokio = { version = "1.54.1", features = ["macros", "rt-multi-thread"] }
+tokio-tungstenite = { version = "0.30.0", features = ["rustls"] }
