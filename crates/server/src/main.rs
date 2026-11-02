@@ -1,7 +1,9 @@
 mod connection_manager;
+mod db;
 
 use connection_manager::ConnectionManager;
 use relay_common::{AuthError, ClientProtocol, Connection, ErrorCodes, ServerProtocol};
+use sqlx::postgres::PgPool;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -56,17 +58,29 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                                                 });
                                                 continue;
                                             }
-                                            let (new, user) = if state.users.read().await.values().any(|name| name == &username) {
-                                                (false, relay_common::User {
-                                                    id: state.users.read().await.iter().find(|(_, name)| *name == &username).map(|(id, _)| *id).unwrap(),
-                                                    username: username.clone(),
-                                                })
+                                            let user = if let Some(user) = match db::get_user_by_username(state.db.clone(), username.clone()).await {
+                                                Ok(u) => u,
+                                                Err(e) => {
+                                                    eprintln!("Error querying user from database: {:?}", e);
+                                                    socket.send(Message::Text(ServerProtocol::AuthFailure { user_id: uuid::Uuid::nil(), reason: AuthError::UnknownError, timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() }.to_json().unwrap_or("".into()).into())).await.unwrap_or_else(|e| {
+                                                        eprintln!("Error sending auth failure message to client: {:?}", e);
+                                                    });
+                                                    continue;
+                                                }
+                                            } {
+                                                user
                                             } else {
-                                                (true, relay_common::User::new(username.clone()))
+                                                match db::create_user(state.db.clone(), username.clone(), username.clone()).await {
+                                                    Ok(user) => user,
+                                                    Err(e) => {
+                                                        eprintln!("Error creating user in database: {:?}", e);
+                                                        socket.send(Message::Text(ServerProtocol::AuthFailure { user_id: uuid::Uuid::nil(), reason: AuthError::UnknownError, timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs() }.to_json().unwrap_or("".into()).into())).await.unwrap_or_else(|e| {
+                                                            eprintln!("Error sending auth failure message to client: {:?}", e);
+                                                        });
+                                                        continue;
+                                                    }
+                                                }
                                             };
-                                            if new {
-                                                state.users.write().await.insert(user.id, username.clone());
-                                            }
                                             let connection = Connection::new(user.id);
                                             conn_id = Some(connection.id);
                                             let active_connection = connection_manager::ActiveConnection {
@@ -160,16 +174,29 @@ async fn handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Respons
 #[derive(Debug, Clone)]
 struct AppState {
     conns: Arc<RwLock<ConnectionManager>>,
-    users: Arc<RwLock<std::collections::HashMap<uuid::Uuid, String>>>,
+    db: PgPool,
 }
 
 #[tokio::main]
 async fn main() {
+    if let Err(e) = dotenvy::dotenv() {
+        panic!("Failed to load .env file: {:?}", e);
+    }
+
+    let db_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set in .env file");
+    let pool = db::get_pool(db_url)
+        .await
+        .expect("fatal: Failed to create database pool");
+    sqlx::migrate!("./migrations")
+        .run(&pool)
+        .await
+        .expect("fatal: Failed to run database migrations");
+
     let app: Router = Router::new()
         .route("/ws", get(handler))
         .with_state(AppState {
             conns: Arc::new(RwLock::new(ConnectionManager::new())),
-            users: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            db: pool,
         });
     let listener = TcpListener::bind("127.0.0.1:3000").await.unwrap();
     println!("Listening on 127.0.0.1:3000");

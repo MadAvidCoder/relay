@@ -5,16 +5,22 @@ use uuid::Uuid;
 pub struct User {
     pub id: Uuid,
     pub username: String,
+    pub display_name: String,
 }
 impl User {
-    pub fn new(username: String) -> Self {
+    pub fn new(username: String, display_name: String) -> Self {
         User {
             id: Uuid::now_v7(),
             username,
+            display_name,
         }
     }
-    pub fn new_with_id(id: Uuid, username: String) -> Self {
-        User { id, username }
+    pub fn new_with_id(id: Uuid, username: String, display_name: String) -> Self {
+        User {
+            id,
+            username,
+            display_name,
+        }
     }
 }
 
