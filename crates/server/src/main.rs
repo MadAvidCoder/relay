@@ -58,7 +58,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                                                 });
                                                 continue;
                                             }
-                                            let user = if let Some(user) = match db::get_user_by_username(state.db.clone(), username.clone()).await {
+                                            let user = if let Some(user) = match db::get_user_by_username(&state.db, username.clone()).await {
                                                 Ok(u) => u,
                                                 Err(e) => {
                                                     eprintln!("Error querying user from database: {:?}", e);
@@ -70,7 +70,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                                             } {
                                                 user
                                             } else {
-                                                match db::create_user(state.db.clone(), username.clone(), username.clone()).await {
+                                                match db::create_user(&state.db, username.clone(), username.clone()).await {
                                                     Ok(user) => user,
                                                     Err(e) => {
                                                         eprintln!("Error creating user in database: {:?}", e);

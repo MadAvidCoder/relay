@@ -6,7 +6,7 @@ pub async fn get_pool(url: String) -> Result<PgPool, Error> {
 }
 
 pub async fn create_user(
-    pool: PgPool,
+    pool: &PgPool,
     username: String,
     display_name: String,
 ) -> Result<User, Error> {
@@ -17,39 +17,39 @@ pub async fn create_user(
         username,
         display_name,
     )
-    .execute(&pool)
+    .execute(pool)
     .await?;
     Ok(User::new_with_id(id, username, display_name))
 }
 
-pub async fn get_user_by_id(pool: PgPool, user_id: uuid::Uuid) -> Result<Option<User>, Error> {
+pub async fn get_user_by_id(pool: &PgPool, user_id: uuid::Uuid) -> Result<Option<User>, Error> {
     let row = sqlx::query!(
         "SELECT id, username, display_name FROM users WHERE id = $1",
         user_id,
     )
-    .fetch_optional(&pool)
+    .fetch_optional(pool)
     .await?;
 
     Ok(row.map(|r| User::new_with_id(r.id, r.username, r.display_name)))
 }
 
-pub async fn get_user_by_username(pool: PgPool, username: String) -> Result<Option<User>, Error> {
+pub async fn get_user_by_username(pool: &PgPool, username: String) -> Result<Option<User>, Error> {
     let row = sqlx::query!(
         "SELECT id, username, display_name FROM users WHERE username = $1",
         username
     )
-    .fetch_optional(&pool)
+    .fetch_optional(pool)
     .await?;
 
     Ok(row.map(|r| User::new_with_id(r.id, r.username, r.display_name)))
 }
 
-pub async fn update_user(pool: PgPool, user: User) -> Result<(), Error> {
+pub async fn update_user(pool: &PgPool, user: User) -> Result<(), Error> {
     let before = sqlx::query!(
         "SELECT username, display_name FROM users WHERE id = $1",
         user.id
     )
-    .fetch_optional(&pool)
+    .fetch_optional(pool)
     .await?;
     if let Some(before) = before {
         if before.username != user.username || before.display_name != user.display_name {
@@ -59,7 +59,7 @@ pub async fn update_user(pool: PgPool, user: User) -> Result<(), Error> {
                 user.display_name,
                 user.id
             )
-            .execute(&pool)
+            .execute(pool)
             .await?;
             Ok(())
         } else {
