@@ -13,6 +13,9 @@ impl User {
             username,
         }
     }
+    pub fn new_with_id(id: Uuid, username: String) -> Self {
+        User { id, username }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -69,7 +72,7 @@ impl Message {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientProtocol {
-    Auth { user_id: Uuid },
+    Auth { username: String },
     SendMessage { message: String, recipient_id: Uuid },
 }
 impl ClientProtocol {
@@ -85,6 +88,8 @@ impl ClientProtocol {
 pub enum AuthError {
     InvalidCredentials,
     UserNotFound,
+    AlreadyAuthenticated,
+    AlreadyConnected,
     Unauthorized,
     UnknownError,
 }
@@ -118,7 +123,7 @@ pub enum ServerProtocol {
         timestamp: u64,
     },
     Error {
-        error_code: ErrorCodes,
+        code: ErrorCodes,
         timestamp: u64,
     },
 }

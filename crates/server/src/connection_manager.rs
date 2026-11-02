@@ -32,8 +32,7 @@ impl ConnectionManager {
     pub fn remove(&mut self, user_id: Uuid, connection_id: Uuid) -> Result<(), String> {
         if self
             .connections
-            .get(&user_id)
-            .and_then(|f| Some(&f.connection.id))
+            .get(&user_id).map(|f| &f.connection.id)
             != Some(&connection_id)
         {
             return Err("Failed to remove user connection. Connection does not match.".into());
