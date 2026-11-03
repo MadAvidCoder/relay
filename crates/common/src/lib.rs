@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -38,39 +39,66 @@ impl Connection {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, sqlx::Type)]
+#[sqlx(type_name = "conversation_type", rename_all = "snake_case")]
+pub enum ConversationType {
+    DM,
+    Group,
+}
+
+#[derive(Debug, Clone, PartialEq, sqlx::Type)]
+#[sqlx(type_name = "conversation_role", rename_all = "snake_case")]
+pub enum ConversationRoles {
+    Admin,
+    Member,
+    Viewer,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Conversation {
+    pub id: Uuid,
+    pub users: Vec<Uuid>,
+    pub conversation_type: ConversationType,
+    pub name: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Message {
     pub id: Uuid,
     pub sender_id: Uuid,
-    pub recipient_id: Uuid,
+    pub conversation_id: Uuid,
     pub content: String,
-    pub timestamp: u64,
+    pub created_at: DateTime<Utc>,
+    pub edited_at: Option<DateTime<Utc>>,
+    pub deleted_at: Option<DateTime<Utc>>,
 }
 impl Message {
-    pub fn new(sender_id: Uuid, recipient_id: Uuid, content: String) -> Self {
+    pub fn new(sender_id: Uuid, conversation_id: Uuid, content: String) -> Self {
         Message {
             id: Uuid::now_v7(),
             sender_id,
-            recipient_id,
+            conversation_id,
             content,
-            timestamp: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs(),
+            created_at: chrono::Utc::now(),
+            edited_at: None,
+            deleted_at: None,
         }
     }
     pub fn new_with_timestamp(
         sender_id: Uuid,
-        recipient_id: Uuid,
+        conversation_id: Uuid,
         content: String,
-        timestamp: u64,
+        timestamp: DateTime<Utc>,
     ) -> Self {
         Message {
             id: Uuid::now_v7(),
             sender_id,
-            recipient_id,
+            conversation_id,
             content,
-            timestamp,
+            created_at: timestamp,
+            edited_at: None,
+            deleted_at: None,
         }
     }
 }
@@ -78,8 +106,17 @@ impl Message {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientProtocol {
-    Auth { username: String },
-    SendMessage { message: String, recipient_id: Uuid },
+    Auth {
+        username: String,
+    },
+    SendMessage {
+        message: String,
+        conversation_id: Uuid,
+    },
+    CreateConversation {
+        users: Vec<Uuid>,
+        name: Option<String>,
+    },
 }
 impl ClientProtocol {
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
@@ -103,8 +140,10 @@ pub enum AuthError {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum ErrorCodes {
     NotAuthenticated,
+    Unauthorised,
     InvalidRequest,
     RecipientNotFound,
+    ConversationNotFound,
     InternalError,
     UnknownError,
 }
@@ -114,23 +153,27 @@ pub enum ErrorCodes {
 pub enum ServerProtocol {
     AuthSuccess {
         user_id: Uuid,
-        timestamp: u64,
+        timestamp: DateTime<Utc>,
     },
     AuthFailure {
         user_id: Uuid,
         reason: AuthError,
-        timestamp: u64,
+        timestamp: DateTime<Utc>,
+    },
+    ConversationCreated {
+        conversation_id: Uuid,
+        timestamp: DateTime<Utc>,
     },
     NewMessage {
         message_id: Uuid,
         sender_id: Uuid,
-        recipient_id: Uuid,
+        conversation_id: Uuid,
         message: String,
-        timestamp: u64,
+        timestamp: DateTime<Utc>,
     },
     Error {
         code: ErrorCodes,
-        timestamp: u64,
+        timestamp: DateTime<Utc>,
     },
 }
 
