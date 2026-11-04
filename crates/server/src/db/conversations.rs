@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use relay_common::{Conversation, User};
 use sqlx::{Error, PgPool};
 use uuid::Uuid;
@@ -20,15 +22,15 @@ pub async fn create_conversation(
     )
     .fetch_one(pool)
     .await?;
-    for user in &users {
-        sqlx::query!(
-            "INSERT INTO conversation_members (conversation_id, user_id) VALUES ($1, $2)",
-            conv.id,
-            user,
-        )
-        .execute(pool)
-        .await?;
-    }
+
+    let users = sqlx::query_as!(
+        User,
+        "WITH new_members AS (INSERT INTO conversation_members (conversation_id, user_id) SELECT $1, id FROM users WHERE id = ANY($2) RETURNING user_id) SELECT users.id, users.username, users.display_name FROM new_members JOIN users ON new_members.user_id = users.id",
+        conv.id,
+        &users,
+    )
+    .fetch_all(pool)
+    .await?;
 
     Ok(Conversation {
         id: conv.id,
@@ -71,4 +73,32 @@ pub async fn get_conversation_members(
         .collect();
 
     Ok(users)
+}
+
+pub async fn get_user_conversations(pool: &PgPool, user: Uuid) -> Result<Vec<Conversation>, Error> {
+    let q = sqlx::query!(
+        "SELECT c.id, c.type AS \"c_type: relay_common::ConversationType\", c.name, c.created_at, m.content FROM conversations c JOIN conversation_members cm ON c.id = cm.conversation_id LEFT JOIN LATERAL (SELECT content FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) m ON true WHERE cm.user_id = $1",
+        user
+    ).fetch_all(pool).await?;
+    let a = sqlx::query!(
+        "SELECT u.id, u.username, u.display_name, cm.conversation_id FROM users u INNER JOIN conversation_members cm ON u.id = cm.user_id WHERE cm.conversation_id = ANY($1)",
+        &q.iter().map(|w| w.id).collect::<Vec<_>>()
+    ).fetch_all(pool).await?;
+
+    let mut map = HashMap::new();
+    for row in a {
+        map.entry(row.conversation_id)
+            .or_insert_with(Vec::new)
+            .push(User::new_with_id(row.id, row.username, row.display_name));
+    }
+
+    Ok(q.into_iter()
+        .map(|w| Conversation {
+            id: w.id,
+            name: w.name,
+            created_at: w.created_at,
+            conversation_type: w.c_type,
+            users: map.get(&w.id).cloned().unwrap_or_default(),
+        })
+        .collect())
 }

@@ -39,7 +39,7 @@ impl Connection {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, sqlx::Type)]
+#[derive(Debug, Copy, Clone, PartialEq, sqlx::Type)]
 #[sqlx(type_name = "conversation_type", rename_all = "snake_case")]
 pub enum ConversationType {
     DM,
@@ -57,7 +57,7 @@ pub enum ConversationRoles {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Conversation {
     pub id: Uuid,
-    pub users: Vec<Uuid>,
+    pub users: Vec<User>,
     pub conversation_type: ConversationType,
     pub name: Option<String>,
     pub created_at: DateTime<Utc>,

@@ -192,16 +192,10 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                                                     if let Err(e) = sender.send(ServerProtocol::NewMessage { message_id: msg.id, sender_id: msg.sender_id, conversation_id: msg.conversation_id, message: msg.content.clone(), timestamp: msg.created_at }).await
                                                     {
                                                         eprintln!("Error sending message to recipient: {:?}", e);
-                                                        socket.send(Message::Text(ServerProtocol::Error {code: ErrorCodes::InternalError, timestamp: chrono::Utc::now()}.to_json().unwrap_or("".into()).into())).await.unwrap_or_else(|e| {
-                                                            eprintln!("Error sending internal error to client: {:?}", e);
-                                                        });
                                                     }
                                                 } else {
-                                                    eprintln!("Recipient is not connected. Cannot send message.");
+                                                    eprintln!("Recpient is not connected. Sending history is not yet implemented.");
                                                     // todo : send messages when recipient connects
-                                                    socket.send(Message::Text(ServerProtocol::Error {code: ErrorCodes::RecipientNotFound, timestamp: chrono::Utc::now()}.to_json().unwrap_or("".into()).into())).await.unwrap_or_else(|e| {
-                                                        eprintln!("Error sending recipient not found error to client: {:?}", e);
-                                                    });
                                                 }
                                             }
                                         }
