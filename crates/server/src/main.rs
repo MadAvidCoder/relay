@@ -144,16 +144,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                                                 continue;
                                             }
                                             let sender_id = user_id.unwrap();
-                                            let msg = match db::messages::create_message(&state.db, sender_id, conversation_id, message).await {
-                                                Ok(msg) => msg,
-                                                Err(e) => {
-                                                    eprintln!("Error saving message to database: {:?}", e);
-                                                    socket.send(Message::Text(ServerProtocol::Error {code: ErrorCodes::InternalError, timestamp: chrono::Utc::now()}.to_json().unwrap_or("".into()).into())).await.unwrap_or_else(|e| {
-                                                        eprintln!("Error sending internal error to client: {:?}", e);
-                                                    });
-                                                    continue;
-                                                }
-                                            };
+
                                             let users = match db::conversations::get_conversation_members(&state.db, conversation_id, user_id.unwrap()).await {
                                                 Ok(users) => {
                                                     if users.is_empty() {
@@ -174,6 +165,17 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                                                 },
                                                 Err(e) => {
                                                     eprintln!("Error querying conversation members from database: {:?}", e);
+                                                    socket.send(Message::Text(ServerProtocol::Error {code: ErrorCodes::InternalError, timestamp: chrono::Utc::now()}.to_json().unwrap_or("".into()).into())).await.unwrap_or_else(|e| {
+                                                        eprintln!("Error sending internal error to client: {:?}", e);
+                                                    });
+                                                    continue;
+                                                }
+                                            };
+
+                                            let msg = match db::messages::create_message(&state.db, sender_id, conversation_id, message).await {
+                                                Ok(msg) => msg,
+                                                Err(e) => {
+                                                    eprintln!("Error saving message to database: {:?}", e);
                                                     socket.send(Message::Text(ServerProtocol::Error {code: ErrorCodes::InternalError, timestamp: chrono::Utc::now()}.to_json().unwrap_or("".into()).into())).await.unwrap_or_else(|e| {
                                                         eprintln!("Error sending internal error to client: {:?}", e);
                                                     });
