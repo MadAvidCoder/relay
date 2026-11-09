@@ -222,7 +222,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                                                 }
                                             }
                                         },
-                                        ClientProtocol::GetMessages { conversation_id, limit } => {
+                                        ClientProtocol::GetMessages { conversation_id, limit, after } => {
                                             if user_id.is_none() {
                                              eprintln!("User is not authenticated. Cannot get conversations.");
                                                 socket.send(Message::Text(ServerProtocol::Error {code: ErrorCodes::NotAuthenticated, timestamp: chrono::Utc::now()}.to_json().unwrap_or("".into()).into())).await.unwrap_or_else(|e| {
@@ -230,7 +230,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                                                 });
                                                 continue;
                                             }
-                                            match db::messages::get_messages_by_conversation_id(&state.db, conversation_id, limit, user_id.unwrap()).await {
+                                            match db::messages::get_messages_by_conversation_id(&state.db, conversation_id, limit, after, user_id.unwrap()).await {
                                                 Ok(m) => {
                                                     socket.send(Message::Text(ServerProtocol::MessageHistory { conversation_id, messages: m, timestamp: chrono::Utc::now() }.to_json().unwrap_or("".into()).into())).await.unwrap_or_else(|e| {
                                                                                                                 eprintln!("Error sending conversation history to client: {:?}", e);

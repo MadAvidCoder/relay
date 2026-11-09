@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use relay_common::Message;
+use relay_common::{Message, MessageCursor};
 use sqlx::{Error, PgPool};
 use uuid::Uuid;
 
@@ -38,6 +38,7 @@ pub async fn get_messages_by_conversation_id(
     pool: &PgPool,
     conversation_id: Uuid,
     limit: u32,
+    since: Option<MessageCursor>,
     user_id: Uuid,
 ) -> Result<Vec<Message>, Error> {
     if !sqlx::query!("SELECT EXISTS (SELECT 1 FROM conversation_members WHERE conversation_id = $1 AND user_id = $2) AS is_member", conversation_id, user_id).fetch_one(pool).await?.is_member.unwrap_or(false)
@@ -45,7 +46,19 @@ pub async fn get_messages_by_conversation_id(
         return Err(Error::RowNotFound);
     }
 
-    sqlx::query_as!(
+    if let Some(since) = since {
+        sqlx::query_as!(
+        Message,
+        "SELECT * FROM (SELECT * FROM messages WHERE conversation_id = $1 AND (created_at, id) > ($2, $3) ORDER BY created_at DESC, id DESC LIMIT $4) ORDER BY created_at ASC, id ASC",
+        conversation_id,
+        since.created_at,
+        since.id,
+        limit as i64,
+    )
+    .fetch_all(pool)
+    .await
+    } else {
+        sqlx::query_as!(
         Message,
         "SELECT * FROM ( SELECT * FROM messages WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT $2) ORDER BY created_at ASC",
         conversation_id,
@@ -53,6 +66,7 @@ pub async fn get_messages_by_conversation_id(
     )
     .fetch_all(pool)
     .await
+    }
 }
 
 pub async fn update_message(pool: &PgPool, message: Message, user_id: Uuid) -> Result<(), Error> {

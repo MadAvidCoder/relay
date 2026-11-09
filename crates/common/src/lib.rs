@@ -105,6 +105,12 @@ impl Message {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct MessageCursor {
+    pub created_at: DateTime<Utc>,
+    pub id: Uuid,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientProtocol {
     Auth {
@@ -122,6 +128,7 @@ pub enum ClientProtocol {
     GetMessages {
         conversation_id: Uuid,
         limit: u32,
+        after: Option<MessageCursor>,
     },
 }
 impl ClientProtocol {
