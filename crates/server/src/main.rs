@@ -3,7 +3,7 @@ mod db;
 
 use connection_manager::ConnectionManager;
 use relay_common::{
-    AuthError, ClientProtocol, Connection, ConversationRoles, ErrorCodes, ServerProtocol,
+    AuthError, ClientProtocol, Connection, ErrorCodes, ServerProtocol,
 };
 use sqlx::postgres::PgPool;
 use std::sync::Arc;
@@ -19,8 +19,6 @@ use axum::{
     routing::get,
 };
 use tokio::net::TcpListener;
-
-use crate::db::conversations;
 
 async fn handle_socket(mut socket: WebSocket, state: AppState) {
     let (conns_tx, mut conns_rx) = tokio::sync::mpsc::channel::<ServerProtocol>(16);
