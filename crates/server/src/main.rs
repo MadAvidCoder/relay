@@ -2,9 +2,7 @@ mod connection_manager;
 mod db;
 
 use connection_manager::ConnectionManager;
-use relay_common::{
-    AuthError, ClientProtocol, Connection, ErrorCodes, ServerProtocol,
-};
+use relay_common::{AuthError, ClientProtocol, Connection, ErrorCodes, ServerProtocol};
 use sqlx::postgres::PgPool;
 use std::sync::Arc;
 use tokio::sync::RwLock;
