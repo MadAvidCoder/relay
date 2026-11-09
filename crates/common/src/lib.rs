@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct User {
     pub id: Uuid,
     pub username: String,
@@ -39,7 +39,7 @@ impl Connection {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, sqlx::Type)]
+#[derive(Debug, Copy, Serialize, Deserialize, Clone, PartialEq, sqlx::Type)]
 #[sqlx(type_name = "conversation_type", rename_all = "snake_case")]
 pub enum ConversationType {
     DM,
@@ -54,16 +54,17 @@ pub enum ConversationRoles {
     Viewer,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Conversation {
     pub id: Uuid,
     pub users: Vec<User>,
     pub conversation_type: ConversationType,
     pub name: Option<String>,
+    pub latest_message: Option<Message>,
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Message {
     pub id: Uuid,
     pub sender_id: Uuid,
@@ -116,6 +117,11 @@ pub enum ClientProtocol {
     CreateConversation {
         users: Vec<Uuid>,
         name: Option<String>,
+    },
+    GetConversations,
+    GetMessages {
+        conversation_id: Uuid,
+        limit: u32,
     },
 }
 impl ClientProtocol {
@@ -173,6 +179,15 @@ pub enum ServerProtocol {
     },
     Error {
         code: ErrorCodes,
+        timestamp: DateTime<Utc>,
+    },
+    ConversationList {
+        conversations: Vec<Conversation>,
+        timestamp: DateTime<Utc>,
+    },
+    MessageHistory {
+        conversation_id: Uuid,
+        messages: Vec<Message>,
         timestamp: DateTime<Utc>,
     },
 }

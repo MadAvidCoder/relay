@@ -33,11 +33,13 @@ pub async fn get_message_by_id(pool: &PgPool, message_id: Uuid) -> Result<Option
 pub async fn get_messages_by_conversation_id(
     pool: &PgPool,
     conversation_id: Uuid,
+    limit: u32,
 ) -> Result<Vec<Message>, Error> {
     sqlx::query_as!(
         Message,
-        "SELECT * FROM messages WHERE conversation_id = $1 ORDER BY created_at ASC",
+        "SELECT * FROM ( SELECT * FROM messages WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT $2) ORDER BY created_at ASC",
         conversation_id,
+        limit as i64
     )
     .fetch_all(pool)
     .await
@@ -76,5 +78,18 @@ pub async fn get_messages_since(
         since,
     )
     .fetch_all(pool)
+    .await
+}
+
+pub async fn get_latest_message(
+    pool: &PgPool,
+    conversation_id: Uuid,
+) -> Result<Option<Message>, Error> {
+    sqlx::query_as!(
+        Message,
+        "SELECT * FROM messages WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT 1",
+        conversation_id
+    )
+    .fetch_optional(pool)
     .await
 }

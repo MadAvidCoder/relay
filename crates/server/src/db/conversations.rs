@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use relay_common::{Conversation, User};
+use relay_common::{Conversation, Message, User};
 use sqlx::{Error, PgPool};
 use uuid::Uuid;
 
@@ -37,6 +37,7 @@ pub async fn create_conversation(
         users,
         name: conv.name,
         conversation_type: conv.conversation_type,
+        latest_message: None,
         created_at: conv.created_at,
     })
 }
@@ -77,7 +78,7 @@ pub async fn get_conversation_members(
 
 pub async fn get_user_conversations(pool: &PgPool, user: Uuid) -> Result<Vec<Conversation>, Error> {
     let q = sqlx::query!(
-        "SELECT c.id, c.type AS \"c_type: relay_common::ConversationType\", c.name, c.created_at, m.content FROM conversations c JOIN conversation_members cm ON c.id = cm.conversation_id LEFT JOIN LATERAL (SELECT content FROM messages WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) m ON true WHERE cm.user_id = $1",
+        "SELECT c.id, c.type AS \"c_type: relay_common::ConversationType\", c.name, c.created_at, m.sender_id, m.content, m.edited_at, m.deleted_at, m.id AS message_id, m.created_at AS message_created_at FROM conversations c JOIN conversation_members cm ON c.id = cm.conversation_id LEFT JOIN LATERAL (SELECT m.content, m.id, m.sender_id, m.edited_at, m.deleted_at, m.created_at FROM messages m WHERE conversation_id = c.id ORDER BY created_at DESC LIMIT 1) m ON true WHERE cm.user_id = $1",
         user
     ).fetch_all(pool).await?;
     let a = sqlx::query!(
@@ -97,6 +98,21 @@ pub async fn get_user_conversations(pool: &PgPool, user: Uuid) -> Result<Vec<Con
             id: w.id,
             name: w.name,
             created_at: w.created_at,
+            latest_message: if let (Some(m_id), Some(con), Some(c_at), Some(s_id)) =
+                (w.message_id, w.content, w.message_created_at, w.sender_id)
+            {
+                Some(Message {
+                    id: m_id,
+                    sender_id: s_id,
+                    conversation_id: w.id,
+                    content: con,
+                    created_at: c_at,
+                    edited_at: w.edited_at,
+                    deleted_at: w.deleted_at,
+                })
+            } else {
+                None
+            },
             conversation_type: w.c_type,
             users: map.get(&w.id).cloned().unwrap_or_default(),
         })
