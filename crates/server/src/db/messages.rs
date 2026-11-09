@@ -34,7 +34,13 @@ pub async fn get_messages_by_conversation_id(
     pool: &PgPool,
     conversation_id: Uuid,
     limit: u32,
+    user_id: Uuid,
 ) -> Result<Vec<Message>, Error> {
+    if !sqlx::query!("SELECT EXISTS (SELECT 1 FROM conversation_members WHERE conversation_id = $1 AND user_id = $2) AS is_member", conversation_id, user_id).fetch_one(pool).await?.is_member.unwrap_or(false)
+    {
+        return Err(Error::RowNotFound);
+    }
+
     sqlx::query_as!(
         Message,
         "SELECT * FROM ( SELECT * FROM messages WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT $2) ORDER BY created_at ASC",
@@ -45,21 +51,23 @@ pub async fn get_messages_by_conversation_id(
     .await
 }
 
-pub async fn update_message(pool: &PgPool, message: Message) -> Result<(), Error> {
+pub async fn update_message(pool: &PgPool, message: Message, user_id: Uuid) -> Result<(), Error> {
     sqlx::query!(
-        "UPDATE messages SET content = $1, edited_at = NOW() WHERE id = $2",
+        "UPDATE messages SET content = $1, edited_at = NOW() WHERE id = $2 AND sender_id = $3",
         message.content,
-        message.id
+        message.id,
+        user_id
     )
     .execute(pool)
     .await?;
     Ok(())
 }
 
-pub async fn delete_message(pool: &PgPool, message_id: Uuid) -> Result<(), Error> {
+pub async fn delete_message(pool: &PgPool, message_id: Uuid, user_id: Uuid) -> Result<(), Error> {
     sqlx::query!(
-        "UPDATE messages SET content = '<DELETED>', deleted_at = NOW() WHERE id = $1",
-        message_id
+        "UPDATE messages SET content = '<DELETED>', deleted_at = NOW() WHERE id = $1 AND sender_id = $2",
+        message_id,
+        user_id
     )
     .execute(pool)
     .await?;
@@ -70,7 +78,12 @@ pub async fn get_messages_since(
     pool: &PgPool,
     conversation_id: Uuid,
     since: DateTime<Utc>,
+    user_id: Uuid,
 ) -> Result<Vec<Message>, Error> {
+    if !sqlx::query!("SELECT EXISTS (SELECT 1 FROM conversation_members WHERE conversation_id = $1 AND user_id = $2) AS is_member", conversation_id, user_id).fetch_one(pool).await?.is_member.unwrap_or(false)
+    {
+        return Err(Error::RowNotFound);
+    }
     sqlx::query_as!(
         Message,
         "SELECT * FROM messages WHERE conversation_id = $1 AND created_at > $2 ORDER BY created_at ASC",
@@ -84,7 +97,12 @@ pub async fn get_messages_since(
 pub async fn get_latest_message(
     pool: &PgPool,
     conversation_id: Uuid,
+    user_id: Uuid,
 ) -> Result<Option<Message>, Error> {
+    if !sqlx::query!("SELECT EXISTS (SELECT 1 FROM conversation_members WHERE conversation_id = $1 AND user_id = $2) AS is_member", conversation_id, user_id).fetch_one(pool).await?.is_member.unwrap_or(false)
+    {
+        return Err(Error::RowNotFound);
+    }
     sqlx::query_as!(
         Message,
         "SELECT * FROM messages WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT 1",

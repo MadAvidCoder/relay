@@ -60,7 +60,13 @@ pub async fn add_user_to_conversation(
 pub async fn get_conversation_members(
     pool: &PgPool,
     conversation_id: Uuid,
+    user_id: Uuid,
 ) -> Result<Vec<User>, Error> {
+    if !sqlx::query!("SELECT EXISTS (SELECT 1 FROM conversation_members WHERE conversation_id = $1 AND user_id = $2) AS is_member", conversation_id, user_id).fetch_one(pool).await?.is_member.unwrap_or(false)
+    {
+        return Err(Error::RowNotFound);
+    }
+
     let rows = sqlx::query!(
         "SELECT u.id, u.username, u.display_name FROM users u INNER JOIN conversation_members cm ON u.id = cm.user_id WHERE cm.conversation_id = $1",
         conversation_id,
