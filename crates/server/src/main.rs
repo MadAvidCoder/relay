@@ -2,7 +2,9 @@ mod connection_manager;
 mod db;
 
 use connection_manager::ConnectionManager;
-use relay_common::{AuthError, ClientProtocol, Connection, ErrorCodes, ServerProtocol};
+use relay_common::{
+    AuthError, ClientProtocol, Connection, ConversationRoles, ErrorCodes, ServerProtocol,
+};
 use sqlx::postgres::PgPool;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -17,6 +19,8 @@ use axum::{
     routing::get,
 };
 use tokio::net::TcpListener;
+
+use crate::db::conversations;
 
 async fn handle_socket(mut socket: WebSocket, state: AppState) {
     let (conns_tx, mut conns_rx) = tokio::sync::mpsc::channel::<ServerProtocol>(16);
@@ -144,7 +148,17 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                                                 continue;
                                             }
                                             let sender_id = user_id.unwrap();
-                                            let users = match db::conversations::get_conversation_members(&state.db, conversation_id).await {
+                                            let msg = match db::messages::create_message(&state.db, sender_id, conversation_id, message).await {
+                                                Ok(msg) => msg,
+                                                Err(e) => {
+                                                    eprintln!("Error saving message to database: {:?}", e);
+                                                    socket.send(Message::Text(ServerProtocol::Error {code: ErrorCodes::InternalError, timestamp: chrono::Utc::now()}.to_json().unwrap_or("".into()).into())).await.unwrap_or_else(|e| {
+                                                        eprintln!("Error sending internal error to client: {:?}", e);
+                                                    });
+                                                    continue;
+                                                }
+                                            };
+                                            let users = match db::conversations::get_conversation_members(&state.db, conversation_id, user_id.unwrap()).await {
                                                 Ok(users) => {
                                                     if users.is_empty() {
                                                         eprintln!("Conversation not found. Cannot send message.");
@@ -171,17 +185,6 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                                                 }
                                             };
 
-                                            let msg = match db::messages::create_message(&state.db, sender_id, conversation_id, message).await {
-                                                Ok(msg) => msg,
-                                                Err(e) => {
-                                                    eprintln!("Error saving message to database: {:?}", e);
-                                                    socket.send(Message::Text(ServerProtocol::Error {code: ErrorCodes::InternalError, timestamp: chrono::Utc::now()}.to_json().unwrap_or("".into()).into())).await.unwrap_or_else(|e| {
-                                                        eprintln!("Error sending internal error to client: {:?}", e);
-                                                    });
-                                                    continue;
-                                                }
-                                            };
-
                                             for user in users {
                                                 let recipient_id = user.id;
 
@@ -198,7 +201,51 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                                                     // todo : send messages when recipient connects
                                                 }
                                             }
-                                        }
+                                        },
+                                        ClientProtocol::GetConversations => {
+                                            if user_id.is_none() {
+                                                eprintln!("User is not authenticated. Cannot get conversations.");
+                                                socket.send(Message::Text(ServerProtocol::Error {code: ErrorCodes::NotAuthenticated, timestamp: chrono::Utc::now()}.to_json().unwrap_or("".into()).into())).await.unwrap_or_else(|e| {
+                                                    eprintln!("Error sending unauthenticated errror msg to client: {:?}", e);
+                                                });
+                                                continue;
+                                            }
+                                            match db::conversations::get_user_conversations(&state.db, user_id.unwrap()).await {
+                                                Ok(conversations) => {
+                                                    socket.send(Message::Text(ServerProtocol::ConversationList { conversations, timestamp: chrono::Utc::now() }.to_json().unwrap_or("".into()).into())).await.unwrap_or_else(|e| {
+                                                        eprintln!("Error sending conversation created message to client: {:?}", e);
+                                                    });
+                                                }
+                                                Err(e) => {
+                                                    eprintln!("Error getting conversations from database: {:?}", e);
+                                                    socket.send(Message::Text(ServerProtocol::Error {code: ErrorCodes::InternalError, timestamp: chrono::Utc::now()}.to_json().unwrap_or("".into()).into())).await.unwrap_or_else(|e| {
+                                                        eprintln!("Error sending internal error to client: {:?}", e);
+                                                    });
+                                                }
+                                            }
+                                        },
+                                        ClientProtocol::GetMessages { conversation_id, limit } => {
+                                            if user_id.is_none() {
+                                             eprintln!("User is not authenticated. Cannot get conversations.");
+                                                socket.send(Message::Text(ServerProtocol::Error {code: ErrorCodes::NotAuthenticated, timestamp: chrono::Utc::now()}.to_json().unwrap_or("".into()).into())).await.unwrap_or_else(|e| {
+                                                    eprintln!("Error sending unauthenticated errror msg to client: {:?}", e);
+                                                });
+                                                continue;
+                                            }
+                                            match db::messages::get_messages_by_conversation_id(&state.db, conversation_id, limit, user_id.unwrap()).await {
+                                                Ok(m) => {
+                                                    socket.send(Message::Text(ServerProtocol::MessageHistory { conversation_id, messages: m, timestamp: chrono::Utc::now() }.to_json().unwrap_or("".into()).into())).await.unwrap_or_else(|e| {
+                                                                                                                eprintln!("Error sending conversation history to client: {:?}", e);
+                                                    })
+                                                },
+                                                Err(e) => {
+                                                    eprintln!("Error getting conversations from database: {:?}", e);
+                                                    socket.send(Message::Text(ServerProtocol::Error {code: ErrorCodes::InternalError, timestamp: chrono::Utc::now()}.to_json().unwrap_or("".into()).into())).await.unwrap_or_else(|e| {
+                                                        eprintln!("Error sending internal error to client: {:?}", e);
+                                                    });
+                                                }
+                                            }
+                                        },
                                     }
                                 }
                                 Err(e) => {

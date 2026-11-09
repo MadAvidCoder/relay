@@ -9,6 +9,10 @@ pub async fn create_message(
     conversation_id: Uuid,
     content: String,
 ) -> Result<Message, Error> {
+    if !sqlx::query!("SELECT EXISTS (SELECT 1 FROM conversation_members WHERE conversation_id = $1 AND user_id = $2) AS is_member", conversation_id, sender_id).fetch_one(pool).await?.is_member.unwrap_or(false)
+    {
+        return Err(Error::RowNotFound);
+    }
     let id = Uuid::now_v7();
     sqlx::query_as!(
         Message,
