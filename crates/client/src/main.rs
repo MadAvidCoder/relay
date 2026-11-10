@@ -137,7 +137,7 @@ impl App {
         let split = self.split_str(&self.cur_draft, self.draft_curs_pos);
         let spans = vec![
             Span::from(split.0),
-            Span::styled("|", Style::new().yellow()),
+            // Span::styled("|", Style::new().yellow()),
             Span::from(split.1),
         ];
         frame.render_widget(
@@ -145,6 +145,10 @@ impl App {
                 .block(Block::default().borders(Borders::ALL).title("New Message")),
             area,
         );
+        let x = area.x + 1 + split.0.chars().count() as u16;
+        let y = area.y + 1;
+
+        frame.set_cursor_position((x, y));
     }
 
     fn draw(&self, frame: &mut Frame) {
