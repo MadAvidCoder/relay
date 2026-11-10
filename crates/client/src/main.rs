@@ -73,13 +73,13 @@ impl App {
                     } else {
                         self.cur_draft.push(c);
                     }
-                    self.draft_curs_pos = self.draft_curs_pos.saturating_add(1);
+                    self.draft_curs_pos = self.draft_curs_pos.saturating_add(1).min(self.cur_draft.len());
                 }
                 KeyCode::Left if self.input_mode == InputModes::Drafting => {
                     self.draft_curs_pos = self.draft_curs_pos.saturating_sub(1);
                 }
                 KeyCode::Right if self.input_mode == InputModes::Drafting => {
-                    self.draft_curs_pos = self.draft_curs_pos.saturating_add(1);
+                    self.draft_curs_pos = self.draft_curs_pos.saturating_add(1).min(self.cur_draft.len());
                 }
                 KeyCode::Backspace
                     if self.input_mode == InputModes::Drafting
