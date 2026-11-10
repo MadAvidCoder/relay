@@ -11,6 +11,8 @@ use ratatui::{
 use relay_common::{ClientProtocol, Conversation, ServerProtocol};
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 #[derive(Debug, PartialEq)]
 enum InputModes {
@@ -58,45 +60,70 @@ impl App {
     }
 
     fn handle_events(&mut self) -> Result<()> {
-        if event::poll(std::time::Duration::from_millis(50))?
-            && let Event::Key(key) = event::read()?
-            && key.is_press()
-        {
-            match key.code {
-                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    self.running = false
-                }
-                KeyCode::Char(c) if self.input_mode == InputModes::Drafting => {
-                    if let Some((b_ind, _)) = self.cur_draft.char_indices().nth(self.draft_curs_pos)
-                    {
-                        self.cur_draft.insert(b_ind, c);
-                    } else {
-                        self.cur_draft.push(c);
+        if event::poll(std::time::Duration::from_millis(50))? {
+            match event::read()? {
+                Event::Key(key) if key.is_press() => match key.code {
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        self.running = false
                     }
-                    self.draft_curs_pos = self.draft_curs_pos.saturating_add(1).min(self.cur_draft.len());
-                }
-                KeyCode::Left if self.input_mode == InputModes::Drafting => {
-                    self.draft_curs_pos = self.draft_curs_pos.saturating_sub(1);
-                }
-                KeyCode::Right if self.input_mode == InputModes::Drafting => {
-                    self.draft_curs_pos = self.draft_curs_pos.saturating_add(1).min(self.cur_draft.len());
-                }
-                KeyCode::Backspace
-                    if self.input_mode == InputModes::Drafting
-                        && self.draft_curs_pos > 0
-                        && let Some((b_ind, _)) =
-                            self.cur_draft.char_indices().nth(self.draft_curs_pos - 1) =>
-                {
-                    self.cur_draft.remove(b_ind);
-                    self.draft_curs_pos = self.draft_curs_pos.saturating_sub(1);
-                }
-                KeyCode::Delete
-                    if self.input_mode == InputModes::Drafting
-                        && self.draft_curs_pos < self.cur_draft.len()
-                        && let Some((b_ind, _)) =
-                            self.cur_draft.char_indices().nth(self.draft_curs_pos) =>
-                {
-                    self.cur_draft.remove(b_ind);
+                    KeyCode::Char(c) if self.input_mode == InputModes::Drafting => {
+                        let b_ind = self
+                            .cur_draft
+                            .grapheme_indices(true)
+                            .nth(self.draft_curs_pos)
+                            .map(|(i, _)| i)
+                            .unwrap_or(self.cur_draft.len());
+
+                        self.cur_draft.insert(b_ind, c);
+
+                        self.draft_curs_pos += c.to_string().graphemes(true).count()
+                    }
+                    KeyCode::Left if self.input_mode == InputModes::Drafting => {
+                        self.draft_curs_pos = self.draft_curs_pos.saturating_sub(1);
+                    }
+                    KeyCode::Right if self.input_mode == InputModes::Drafting => {
+                        self.draft_curs_pos = self
+                            .draft_curs_pos
+                            .saturating_add(1)
+                            .min(self.cur_draft.graphemes(true).count());
+                    }
+                    KeyCode::Backspace
+                        if self.input_mode == InputModes::Drafting && self.draft_curs_pos > 0 =>
+                    {
+                        self.cur_draft.remove(
+                            self.cur_draft
+                                .grapheme_indices(true)
+                                .nth(self.draft_curs_pos - 1)
+                                .map(|(i, _)| i)
+                                .unwrap_or(self.cur_draft.len()),
+                        );
+                        self.draft_curs_pos -= 1;
+                    }
+                    KeyCode::Delete
+                        if self.input_mode == InputModes::Drafting
+                            && self.draft_curs_pos < self.cur_draft.width() =>
+                    {
+                        self.cur_draft.remove(
+                            self.cur_draft
+                                .grapheme_indices(true)
+                                .nth(self.draft_curs_pos)
+                                .map(|(i, _)| i)
+                                .unwrap_or(self.cur_draft.len()),
+                        );
+                    }
+                    _ => {}
+                },
+                Event::Paste(text) if self.input_mode == InputModes::Drafting => {
+                    let b_ind = self
+                        .cur_draft
+                        .grapheme_indices(true)
+                        .nth(self.draft_curs_pos)
+                        .map(|(i, _)| i)
+                        .unwrap_or(self.cur_draft.len());
+
+                    self.cur_draft.insert_str(b_ind, &text);
+
+                    self.draft_curs_pos += text.graphemes(true).count()
                 }
                 _ => {}
             }
@@ -127,7 +154,7 @@ impl App {
     }
 
     fn split_str<'a>(&self, s: &'a str, ind: usize) -> (&'a str, &'a str) {
-        match s.char_indices().nth(ind) {
+        match s.grapheme_indices(true).nth(ind) {
             Some((b_ind, _)) => s.split_at(b_ind),
             None => (s, ""),
         }
@@ -145,7 +172,7 @@ impl App {
                 .block(Block::default().borders(Borders::ALL).title("New Message")),
             area,
         );
-        let x = area.x + 1 + split.0.chars().count() as u16;
+        let x = area.x + 1 + split.0.width() as u16;
         let y = area.y + 1;
 
         frame.set_cursor_position((x, y));
