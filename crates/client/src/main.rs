@@ -8,6 +8,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
+use ratatui_textarea::TextArea;
 use relay_common::{ClientProtocol, Conversation, ServerProtocol};
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
@@ -24,11 +25,10 @@ enum InputModes {
 struct App {
     running: bool,
     cur_conversation: Option<Conversation>,
-    cur_draft: String,
+    text_area: TextArea<'static>,
     messages: Vec<ServerProtocol>,
     input_mode: InputModes,
     tx: mpsc::Sender<ClientProtocol>,
-    draft_curs_pos: usize,
     rx: mpsc::Receiver<ServerProtocol>,
 }
 impl App {
@@ -37,10 +37,9 @@ impl App {
             running: true,
             rx,
             tx,
-            cur_draft: String::new(),
+            text_area: TextArea::default(),
             cur_conversation: None,
             input_mode: InputModes::Drafting,
-            draft_curs_pos: 0,
             messages: Vec::new(),
         }
     }
@@ -66,65 +65,8 @@ impl App {
                     KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         self.running = false
                     }
-                    KeyCode::Char(c) if self.input_mode == InputModes::Drafting => {
-                        let b_ind = self
-                            .cur_draft
-                            .grapheme_indices(true)
-                            .nth(self.draft_curs_pos)
-                            .map(|(i, _)| i)
-                            .unwrap_or(self.cur_draft.len());
-
-                        self.cur_draft.insert(b_ind, c);
-
-                        self.draft_curs_pos += c.to_string().graphemes(true).count()
-                    }
-                    KeyCode::Left if self.input_mode == InputModes::Drafting => {
-                        self.draft_curs_pos = self.draft_curs_pos.saturating_sub(1);
-                    }
-                    KeyCode::Right if self.input_mode == InputModes::Drafting => {
-                        self.draft_curs_pos = self
-                            .draft_curs_pos
-                            .saturating_add(1)
-                            .min(self.cur_draft.graphemes(true).count());
-                    }
-                    KeyCode::Backspace
-                        if self.input_mode == InputModes::Drafting && self.draft_curs_pos > 0 =>
-                    {
-                        self.cur_draft.remove(
-                            self.cur_draft
-                                .grapheme_indices(true)
-                                .nth(self.draft_curs_pos - 1)
-                                .map(|(i, _)| i)
-                                .unwrap_or(self.cur_draft.len()),
-                        );
-                        self.draft_curs_pos -= 1;
-                    }
-                    KeyCode::Delete
-                        if self.input_mode == InputModes::Drafting
-                            && self.draft_curs_pos < self.cur_draft.width() =>
-                    {
-                        self.cur_draft.remove(
-                            self.cur_draft
-                                .grapheme_indices(true)
-                                .nth(self.draft_curs_pos)
-                                .map(|(i, _)| i)
-                                .unwrap_or(self.cur_draft.len()),
-                        );
-                    }
                     _ => {}
                 },
-                Event::Paste(text) if self.input_mode == InputModes::Drafting => {
-                    let b_ind = self
-                        .cur_draft
-                        .grapheme_indices(true)
-                        .nth(self.draft_curs_pos)
-                        .map(|(i, _)| i)
-                        .unwrap_or(self.cur_draft.len());
-
-                    self.cur_draft.insert_str(b_ind, &text);
-
-                    self.draft_curs_pos += text.graphemes(true).count()
-                }
                 _ => {}
             }
         }
@@ -161,21 +103,14 @@ impl App {
     }
 
     fn draw_input(&self, frame: &mut Frame, area: Rect) {
-        let split = self.split_str(&self.cur_draft, self.draft_curs_pos);
-        let spans = vec![
-            Span::from(split.0),
-            // Span::styled("|", Style::new().yellow()),
-            Span::from(split.1),
-        ];
         frame.render_widget(
-            Paragraph::new(Line::from(spans))
-                .block(Block::default().borders(Borders::ALL).title("New Message")),
+            &self.text_area.clone().set_block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Main Message Area"),
+            ),
             area,
         );
-        let x = area.x + 1 + split.0.width() as u16;
-        let y = area.y + 1;
-
-        frame.set_cursor_position((x, y));
     }
 
     fn draw(&self, frame: &mut Frame) {
