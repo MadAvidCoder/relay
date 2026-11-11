@@ -5,15 +5,12 @@ use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     style::Style,
-    text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
 use ratatui_textarea::TextArea;
 use relay_common::{ClientProtocol, Conversation, ServerProtocol};
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
-use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
 
 #[derive(Debug, PartialEq)]
 enum InputModes {
@@ -105,13 +102,6 @@ impl App {
         );
     }
 
-    fn split_str<'a>(&self, s: &'a str, ind: usize) -> (&'a str, &'a str) {
-        match s.grapheme_indices(true).nth(ind) {
-            Some((b_ind, _)) => s.split_at(b_ind),
-            None => (s, ""),
-        }
-    }
-
     fn draw_input(&self, frame: &mut Frame, area: Rect) {
         frame.render_widget(&self.text_area, area);
     }
@@ -128,7 +118,6 @@ impl App {
         self.draw_conv_list(frame, cols[0]);
         self.draw_messages(frame, rows[0]);
         self.draw_input(frame, rows[1]);
-        // self.text_area.delete_line_b
     }
 }
 
