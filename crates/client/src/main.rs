@@ -21,7 +21,6 @@ enum InputModes {
     Shortcutting,
     Searching,
 }
-
 struct App {
     running: bool,
     cur_conversation: Option<Conversation>,
@@ -33,11 +32,18 @@ struct App {
 }
 impl App {
     fn new(rx: mpsc::Receiver<ServerProtocol>, tx: mpsc::Sender<ClientProtocol>) -> Self {
+        let mut text_area = TextArea::default();
+        text_area.set_cursor_line_style(Style::default());
+        text_area.set_block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Send a Mesasage"),
+        );
         Self {
             running: true,
             rx,
             tx,
-            text_area: TextArea::default(),
+            text_area,
             cur_conversation: None,
             input_mode: InputModes::Drafting,
             messages: Vec::new(),
@@ -61,12 +67,16 @@ impl App {
     fn handle_events(&mut self) -> Result<()> {
         if event::poll(std::time::Duration::from_millis(50))? {
             match event::read()? {
-                Event::Key(key) if key.is_press() => match key.code {
-                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        self.running = false
-                    }
-                    _ => {}
-                },
+                Event::Key(key)
+                    if key.is_press()
+                        && key.code == KeyCode::Char('c')
+                        && key.modifiers.contains(KeyModifiers::CONTROL) =>
+                {
+                    self.running = false
+                }
+                e if self.input_mode == InputModes::Drafting => {
+                    self.text_area.input(e);
+                }
                 _ => {}
             }
         }
@@ -103,25 +113,22 @@ impl App {
     }
 
     fn draw_input(&self, frame: &mut Frame, area: Rect) {
-        frame.render_widget(
-            &self.text_area.clone().set_block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title("Main Message Area"),
-            ),
-            area,
-        );
+        frame.render_widget(&self.text_area, area);
     }
 
     fn draw(&self, frame: &mut Frame) {
         let cols = Layout::horizontal(vec![Constraint::Percentage(15), Constraint::Percentage(80)])
             .split(frame.area());
-        let rows = Layout::vertical(vec![Constraint::Percentage(100), Constraint::Length(3)])
-            .split(cols[1]);
+        let rows = Layout::vertical(vec![
+            Constraint::Min(5),
+            Constraint::Length((self.text_area.lines().len() as u16 + 2).clamp(3, 8)),
+        ])
+        .split(cols[1]);
 
         self.draw_conv_list(frame, cols[0]);
         self.draw_messages(frame, rows[0]);
         self.draw_input(frame, rows[1]);
+        // self.text_area.delete_line_b
     }
 }
 
