@@ -1,4 +1,4 @@
-use std::{ops::Deref, sync::Arc};
+mod local_db;
 
 use anyhow::{Error, Result};
 use crossterm::event::{Event, EventStream, KeyCode, KeyModifiers};
@@ -10,11 +10,17 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Padding, Paragraph},
 };
-use ratatui_textarea::{Key, TextArea};
+use ratatui_textarea::TextArea;
 use relay_common::{ClientProtocol, Conversation, ServerProtocol, User};
+use std::{collections::HashMap, ops::Deref};
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use uuid::Uuid;
+
+enum InboundMessage {
+    Server(ServerProtocol),
+    Connection(ConnectionStatus),
+}
 
 #[derive(Debug, PartialEq)]
 enum InputModes {
@@ -38,19 +44,27 @@ enum Screens {
     Main {
         draft: TextArea<'static>,
         user: User,
+        selected_conv: Option<Uuid>,
     },
+}
+enum ConnectionStatus {
+    Disconnected,
+    Connecting,
+    Connected,
 }
 struct App {
     running: bool,
     cur_conversation: Option<Conversation>,
-    messages: Vec<Message>,
+    conversations: Vec<Conversation>,
+    connection_status: ConnectionStatus,
+    messages: HashMap<Uuid, Vec<Message>>,
     input_mode: InputModes,
     tx: mpsc::Sender<ClientProtocol>,
-    rx: mpsc::Receiver<ServerProtocol>,
+    rx: mpsc::Receiver<InboundMessage>,
     screen: Screens,
 }
 impl App {
-    fn new(rx: mpsc::Receiver<ServerProtocol>, tx: mpsc::Sender<ClientProtocol>) -> Self {
+    fn new(rx: mpsc::Receiver<InboundMessage>, tx: mpsc::Sender<ClientProtocol>) -> Self {
         let mut username = TextArea::default();
         username.set_cursor_line_style(Style::default());
         username.set_block(Block::default().borders(Borders::ALL).title("  Username  "));
@@ -63,7 +77,9 @@ impl App {
             tx,
             cur_conversation: None,
             input_mode: InputModes::Drafting,
-            messages: Vec::new(),
+            messages: HashMap::new(),
+            conversations: Vec::new(),
+            connection_status: ConnectionStatus::Disconnected,
             screen: Screens::Login {
                 username,
                 password,
@@ -80,7 +96,10 @@ impl App {
         while self.running {
             tokio::select! {
                 Some(msg) = self.rx.recv() => {
-                    self.handle_server_message(msg);
+                    match msg {
+                        InboundMessage::Server(m) => self.handle_server_message(m),
+                        InboundMessage::Connection(s) => self.connection_status = s,
+                    }
                 }
                 Some(Ok(event)) = events.next() => {
                     self.handle_event(event).await?;
@@ -103,7 +122,11 @@ impl App {
                         .borders(Borders::ALL)
                         .title("  Draft a Message  "),
                 );
-                self.screen = Screens::Main { draft: t, user }
+                self.screen = Screens::Main {
+                    draft: t,
+                    user,
+                    selected_conv: None,
+                }
             }
             ServerProtocol::AuthFailure {
                 user_id,
@@ -199,7 +222,11 @@ impl App {
                 }
             }
             Screens::Loading => {}
-            Screens::Main { draft, user: _ } => {
+            Screens::Main {
+                draft,
+                user: _,
+                selected_conv: _,
+            } => {
                 if self.input_mode == InputModes::Drafting {
                     draft.input(event);
                 }
@@ -211,7 +238,7 @@ impl App {
         Ok(())
     }
 
-    fn draw_conv_list(frame: &mut Frame, area: Rect) {
+    fn draw_conv_list(frame: &mut Frame, area: Rect, _sel: &Option<Uuid>) {
         frame.render_widget(
             Paragraph::new("Hello World").block(
                 Block::default()
@@ -243,7 +270,11 @@ impl App {
 
     fn draw(&mut self, frame: &mut Frame) {
         match &mut self.screen {
-            Screens::Main { draft, user } => {
+            Screens::Main {
+                draft,
+                user,
+                selected_conv,
+            } => {
                 let cols = Layout::horizontal(vec![
                     Constraint::Percentage(15),
                     Constraint::Percentage(80),
@@ -261,7 +292,7 @@ impl App {
                 ])
                 .split(cols[1]);
 
-                Self::draw_conv_list(frame, l_rows[0]);
+                Self::draw_conv_list(frame, l_rows[0], selected_conv);
                 Self::draw_name(frame, l_rows[1], &user.username);
                 Self::draw_messages(frame, rows[0]);
                 Self::draw_input(frame, rows[1], draft.deref());
@@ -368,12 +399,18 @@ impl App {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let db = local_db::init().await?;
     let (outbound_tx, mut outbound_rx) = mpsc::channel::<ClientProtocol>(100);
-    let (inbound_tx, inbound_rx) = mpsc::channel::<ServerProtocol>(100);
+    let (inbound_tx, inbound_rx) = mpsc::channel::<InboundMessage>(100);
+
+    let mut app = App::new(inbound_rx, outbound_tx);
 
     let websocket_task: tokio::task::JoinHandle<Result<(), Error>> = tokio::spawn(async move {
         let (ws_stream, _) = connect_async("ws://127.0.0.1:3000/ws").await?;
         let (mut tx, mut rx) = ws_stream.split();
+        inbound_tx
+            .send(InboundMessage::Connection(ConnectionStatus::Connected))
+            .await?;
 
         loop {
             tokio::select!(
@@ -387,7 +424,7 @@ async fn main() -> Result<()> {
                                 break;
                             }
                             Message::Text(t) => {
-                                inbound_tx.send(ServerProtocol::from_json(t.as_str())?).await?;
+                                inbound_tx.send(InboundMessage::Server(ServerProtocol::from_json(t.as_str())?)).await?;
                             },
                             _ => {},
                         },
@@ -395,6 +432,9 @@ async fn main() -> Result<()> {
                             break;
                         }
                     }
+                },
+                else => {
+                    inbound_tx.send(InboundMessage::Connection(ConnectionStatus::Disconnected)).await?;
                 }
             )
         }
@@ -402,7 +442,6 @@ async fn main() -> Result<()> {
         Ok(())
     });
 
-    let mut app = App::new(inbound_rx, outbound_tx);
     let res = app.run().await;
 
     ratatui::restore();
