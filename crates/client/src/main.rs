@@ -8,12 +8,13 @@ use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Padding, Paragraph},
 };
-use ratatui_textarea::TextArea;
-use relay_common::{ClientProtocol, Conversation, ServerProtocol};
+use ratatui_textarea::{Key, TextArea};
+use relay_common::{ClientProtocol, Conversation, ServerProtocol, User};
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
+use uuid::Uuid;
 
 #[derive(Debug, PartialEq)]
 enum InputModes {
@@ -33,8 +34,10 @@ enum Screens {
         password: TextArea<'static>,
         active: LoginFields,
     },
+    Loading,
     Main {
         draft: TextArea<'static>,
+        user: User,
     },
 }
 struct App {
@@ -80,7 +83,7 @@ impl App {
                     self.handle_server_message(msg);
                 }
                 Some(Ok(event)) = events.next() => {
-                    self.handle_event(event)?;
+                    self.handle_event(event).await?;
                 }
                 _ = tick.tick() => {
                     term.draw(|frame| self.draw(frame))?;
@@ -93,12 +96,34 @@ impl App {
 
     fn handle_server_message(&mut self, msg: ServerProtocol) {
         match msg {
-            ServerProtocol::AuthSuccess { user_id, timestamp } => {} // Login TBA - will proceed to logged in screen
+            ServerProtocol::AuthSuccess { user, timestamp } => {
+                let mut t = TextArea::default();
+                t.set_block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title("  Draft a Message  "),
+                );
+                self.screen = Screens::Main { draft: t, user }
+            }
             ServerProtocol::AuthFailure {
                 user_id,
                 reason,
                 timestamp,
-            } => {} //Login TBA - will go back to login
+            } => {
+                //TODO: show reason on screen
+                let mut username = TextArea::default();
+                username.set_cursor_line_style(Style::default());
+                username.set_block(Block::default().borders(Borders::ALL).title("  Username  "));
+                let mut password = TextArea::default();
+                password.set_cursor_line_style(Style::default());
+                password.set_block(Block::default().borders(Borders::ALL).title("  Password  "));
+
+                self.screen = Screens::Login {
+                    username,
+                    password,
+                    active: LoginFields::Username,
+                }
+            }
             ServerProtocol::ConversationCreated {
                 conversation_id,
                 timestamp,
@@ -123,7 +148,7 @@ impl App {
         }
     }
 
-    fn handle_event(&mut self, event: Event) -> Result<()> {
+    async fn handle_event(&mut self, event: Event) -> Result<()> {
         if let Event::Key(key) = event
             && key.is_press()
             && ((key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
@@ -131,6 +156,7 @@ impl App {
         {
             self.running = false;
         }
+        let mut change_screen = None;
         match &mut self.screen {
             Screens::Login {
                 username,
@@ -144,9 +170,14 @@ impl App {
                     match key.code {
                         KeyCode::Enter => {
                             used = true;
-                            todo!("Implement Sign-in");
+                            self.tx
+                                .send(ClientProtocol::Auth {
+                                    username: username.lines().join(""),
+                                })
+                                .await?;
+                            change_screen = Some(Screens::Loading);
                         }
-                        KeyCode::Tab => {
+                        KeyCode::Tab | KeyCode::BackTab => {
                             *active = match active {
                                 LoginFields::Password => LoginFields::Username,
                                 LoginFields::Username => LoginFields::Password,
@@ -167,12 +198,16 @@ impl App {
                     }
                 }
             }
-            Screens::Main { draft } => {
+            Screens::Loading => {}
+            Screens::Main { draft, user: _ } => {
                 if self.input_mode == InputModes::Drafting {
                     draft.input(event);
                 }
             }
         }
+        if let Some(new) = change_screen {
+            self.screen = new
+        };
         Ok(())
     }
 
@@ -202,23 +237,48 @@ impl App {
         frame.render_widget(draft, area);
     }
 
+    fn draw_name(frame: &mut Frame, area: Rect, username: &str) {
+        frame.render_widget(Paragraph::new(username).centered(), area);
+    }
+
     fn draw(&mut self, frame: &mut Frame) {
         match &mut self.screen {
-            Screens::Main { draft } => {
+            Screens::Main { draft, user } => {
                 let cols = Layout::horizontal(vec![
                     Constraint::Percentage(15),
                     Constraint::Percentage(80),
                 ])
                 .split(frame.area());
+                let l_rows = Layout::vertical(vec![
+                    Constraint::Percentage(100),
+                    Constraint::Min(1),
+                    Constraint::Length(1),
+                ])
+                .split(cols[0]);
                 let rows = Layout::vertical(vec![
                     Constraint::Min(5),
                     Constraint::Length((draft.lines().len() as u16 + 2).clamp(3, 8)),
                 ])
                 .split(cols[1]);
 
-                Self::draw_conv_list(frame, cols[0]);
+                Self::draw_conv_list(frame, l_rows[0]);
+                Self::draw_name(frame, l_rows[1], &user.username);
                 Self::draw_messages(frame, rows[0]);
                 Self::draw_input(frame, rows[1], draft.deref());
+            }
+            Screens::Loading => {
+                frame.render_widget(
+                    Paragraph::new("Waiting for Auth...")
+                        .block(
+                            Block::new()
+                                .padding(Padding::new(6, 6, 2, 2))
+                                .borders(Borders::ALL),
+                        )
+                        .alignment(Alignment::Center),
+                    frame
+                        .area()
+                        .centered(Constraint::Percentage(50), Constraint::Percentage(50)),
+                );
             }
             Screens::Login {
                 username,

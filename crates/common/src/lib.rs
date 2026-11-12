@@ -165,7 +165,7 @@ pub enum ErrorCodes {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerProtocol {
     AuthSuccess {
-        user_id: Uuid,
+        user: User,
         timestamp: DateTime<Utc>,
     },
     AuthFailure {

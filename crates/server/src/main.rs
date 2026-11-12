@@ -93,7 +93,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                                             match res {
                                                 Ok(_) => {
                                                     user_id = Some(user.id);
-                                                    socket.send(Message::Text(ServerProtocol::AuthSuccess { user_id: user.id, timestamp: chrono::Utc::now() }.to_json().unwrap_or("".into()).into())).await.unwrap_or_else(|e| {
+                                                    socket.send(Message::Text(ServerProtocol::AuthSuccess { user, timestamp: chrono::Utc::now() }.to_json().unwrap_or("".into()).into())).await.unwrap_or_else(|e| {
                                                         eprintln!("Error sending auth success message to client: {:?}", e);
                                                     });
                                                 }
