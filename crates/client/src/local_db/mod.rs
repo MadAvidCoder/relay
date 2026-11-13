@@ -17,5 +17,8 @@ pub async fn init() -> Result<SqlitePool> {
         .max_connections(5)
         .connect_with(options)
         .await?;
+
+    sqlx::migrate!("./migrations").run(&pool).await?;
+
     Ok(pool)
 }
