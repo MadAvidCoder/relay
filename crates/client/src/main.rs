@@ -107,15 +107,16 @@ impl App {
         let mut tick = tokio::time::interval(std::time::Duration::from_millis(50));
         while self.running {
             tokio::select! {
-                Some(msg) = self.rx.recv() => {
+                msg = self.rx.recv() => {
                     match msg {
-                        InboundMessage::Server(m) => {
+                        Some(InboundMessage::Server(m)) => {
                             match self.handle_server_message(m).await {
                                 Ok(_) => {},
                                 Err(_) => println!("Error"),
                             }
                         },
-                        InboundMessage::Connection(s) => self.connection_status = s,
+                        Some(InboundMessage::Connection(s)) => self.connection_status = s,
+                        None => self.running = false,
                     }
                 }
                 Some(Ok(event)) = events.next() => {
