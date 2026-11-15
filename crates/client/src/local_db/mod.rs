@@ -94,11 +94,10 @@ pub async fn get_contacts(pool: &SqlitePool) -> Result<Vec<User>, anyhow::Error>
         .collect::<Result<Vec<User>, anyhow::Error>>()
 }
 
-pub async fn save_conversations(
-    convs: &Vec<Conversation>,
-    pool: &SqlitePool,
-) -> anyhow::Result<()> {
+pub async fn save_conversations(convs: &[Conversation], pool: &SqlitePool) -> anyhow::Result<()> {
     if !convs.is_empty() {
+        let mut trans = pool.begin().await?;
+
         sqlx::QueryBuilder::new(
             "INSERT INTO conversations (id, name, type, last_message_at, created_at) ",
         ).push_values(convs, |mut b, conv| {
@@ -110,7 +109,41 @@ pub async fn save_conversations(
         })
         .push("ON CONFLICT(id) DO UPDATE SET name = excluded.name, last_message_at = excluded.last_message_at")
         .build()
-        .execute(pool).await?;
+        .execute(&mut *trans).await?;
+
+        let users = convs.iter().flat_map(|c| &c.users).collect::<Vec<&User>>();
+
+        if !users.is_empty() {
+            sqlx::QueryBuilder::new(
+                "INSERT INTO contacts (user_id, username, display_name, added_at) ",
+            )
+            .push_values(users, |mut b, user| {
+                b.push_bind(user.id.to_string())
+                    .push_bind(&user.username)
+                    .push_bind(Some(&user.display_name).filter(|a| !a.is_empty()))
+                    .push_bind(Utc::now().to_rfc3339());
+            })
+            .push("ON CONFLICT (user_id) DO UPDATE SET username = excluded.username")
+            .build()
+            .execute(&mut *trans)
+            .await?;
+
+            let memberships = convs
+                .iter()
+                .flat_map(|conv| conv.users.iter().map(move |user| (conv.id, user.id)))
+                .collect::<Vec<(Uuid, Uuid)>>();
+
+            sqlx::QueryBuilder::new("INSERT INTO conversation_members (conversation_id, user_id) ")
+                .push_values(memberships, |mut b, (conv, user)| {
+                    b.push_bind(conv.to_string())
+                        .push_bind(user.to_string());
+                })
+                .push("ON CONFLICT (conversation_id, user_id) DO NOTHING")
+                .build()
+                .execute(&mut *trans)
+                .await?;
+        }
+        trans.commit().await?;
     }
 
     Ok(())
@@ -266,7 +299,7 @@ pub async fn delete_conversation(conv_id: &Uuid, pool: &SqlitePool) -> Result<()
     .map(|_| ())
 }
 
-pub async fn save_messages(msgs: &Vec<Message>, pool: &SqlitePool) -> anyhow::Result<()> {
+pub async fn save_messages(msgs: &[Message], pool: &SqlitePool) -> anyhow::Result<()> {
     if !msgs.is_empty() {
         sqlx::QueryBuilder::new(
             r#"INSERT INTO messages (
