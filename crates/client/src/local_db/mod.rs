@@ -227,7 +227,7 @@ pub async fn get_conversation(
         conversation_type: match req.conv_type.as_str() {
             "dm" => ConversationType::DM,
             "group" => ConversationType::Group,
-            _ => unreachable!(),
+            _ => return Err(anyhow!("Conversation type does not exist")),
         },
         created_at: DateTime::parse_from_rfc3339(&req.created_at)?.with_timezone(&Utc),
         name: req.name,
