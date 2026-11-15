@@ -102,7 +102,7 @@ pub async fn save_conversations(
         sqlx::QueryBuilder::new(
             "INSERT INTO conversations (id, name, type, last_message_at, created_at) ",
         ).push_values(convs, |mut b, conv| {
-            b.push(conv.id.to_string())
+            b.push_bind(conv.id.to_string())
                 .push_bind(&conv.name)
                 .push_bind(conv.conversation_type.to_string())
                 .push_bind(conv.latest_message.as_ref().map(|f| f.created_at.to_rfc3339()))
