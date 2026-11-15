@@ -220,12 +220,13 @@ impl App {
                         .send(ClientProtocol::GetMessages {
                             conversation_id: conv.id,
                             limit: 100,
-                            after: history.iter().max_by_key(|m| m.created_at).map(|l| {
-                                MessageCursor {
+                            after: history
+                                .iter()
+                                .max_by_key(|m| (m.created_at, m.id))
+                                .map(|l| MessageCursor {
                                     created_at: l.created_at,
                                     id: l.id,
-                                }
-                            }),
+                                }),
                         })
                         .await?;
                 }

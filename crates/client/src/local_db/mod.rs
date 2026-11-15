@@ -117,6 +117,8 @@ pub async fn save_conversations(
 }
 
 pub async fn save_conversation(conv: &Conversation, pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let mut trans = pool.begin().await?;
+
     sqlx::query!(
         r#"INSERT INTO conversations
             (id, name, type, last_message_at, created_at)
@@ -136,7 +138,7 @@ pub async fn save_conversation(conv: &Conversation, pool: &SqlitePool) -> Result
             .map(|f| f.created_at.to_rfc3339()),
         conv.created_at.to_rfc3339(),
     )
-    .execute(pool)
+    .execute(&mut *trans)
     .await?;
 
     if !conv.users.is_empty() {
@@ -151,7 +153,7 @@ pub async fn save_conversation(conv: &Conversation, pool: &SqlitePool) -> Result
         })
         .push("ON CONFLICT (user_id) DO UPDATE SET username = excluded.username")
         .build()
-        .execute(pool)
+        .execute(&mut *trans)
         .await?;
 
         sqlx::QueryBuilder::new("INSERT INTO conversation_members (conversation_id, user_id) ")
@@ -161,9 +163,10 @@ pub async fn save_conversation(conv: &Conversation, pool: &SqlitePool) -> Result
             })
             .push("ON CONFLICT (conversation_id, user_id) DO NOTHING")
             .build()
-            .execute(pool)
+            .execute(&mut *trans)
             .await?;
     }
+    trans.commit().await?;
 
     Ok(())
 }
