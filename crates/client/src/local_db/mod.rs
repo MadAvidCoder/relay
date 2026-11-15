@@ -94,6 +94,26 @@ pub async fn get_contacts(pool: &SqlitePool) -> Result<Vec<User>, anyhow::Error>
         .collect::<Result<Vec<User>, anyhow::Error>>()
 }
 
+pub async fn save_conversations(
+    convs: &Vec<Conversation>,
+    pool: &SqlitePool,
+) -> anyhow::Result<()> {
+    sqlx::QueryBuilder::new(
+        "INSERT INTO conversations (id, name, type, last_message_at, created_at) ",
+    ).push_values(convs, |mut b, conv| {
+        b.push(conv.id.to_string())
+            .push_bind(&conv.name)
+            .push_bind(conv.conversation_type.to_string())
+            .push_bind(conv.latest_message.as_ref().map(|f| f.created_at.to_rfc3339()))
+            .push_bind(conv.created_at.to_rfc3339());
+    })
+    .push("ON CONFLICT(id) DO UPDATE SET name = excluded.name, last_message_at = excluded.last_message_at")
+    .build()
+    .execute(pool).await?;
+
+    Ok(())
+}
+
 pub async fn save_conversation(conv: &Conversation, pool: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::query!(
         r#"INSERT INTO conversations
@@ -117,7 +137,7 @@ pub async fn save_conversation(conv: &Conversation, pool: &SqlitePool) -> Result
     .execute(pool)
     .await?;
 
-    sqlx::QueryBuilder::new("INSERT INTO contacts (user_id, username, display_name, added_at)")
+    sqlx::QueryBuilder::new("INSERT INTO contacts (user_id, username, display_name, added_at) ")
         .push_values(&conv.users, |mut b, user| {
             b.push_bind(conv.id.to_string())
                 .push_bind(&user.username)
@@ -233,6 +253,31 @@ pub async fn delete_conversation(conv_id: &Uuid, pool: &SqlitePool) -> Result<()
     .execute(pool)
     .await
     .map(|_| ())
+}
+
+pub async fn save_messages(msgs: &Vec<Message>, pool: &SqlitePool) -> anyhow::Result<()> {
+    sqlx::QueryBuilder::new(
+        r#"INSERT INTO messages (
+            id,
+            conversation_id,
+            sender_id,
+            content,
+            created_at,
+            edited_at,
+            deleted_at
+        ) "#,
+    )
+    .push_values(msgs, |mut b, m| {
+        b.push_bind(m.id.to_string())
+            .push_bind(m.conversation_id.to_string())
+            .push_bind(m.sender_id.to_string())
+            .push_bind(&m.content)
+            .push_bind(m.created_at.to_rfc3339())
+            .push_bind(m.edited_at.map(|f| f.to_rfc3339()))
+            .push_bind(m.deleted_at.map(|f| f.to_rfc3339()));
+    }).push("ON CONFLICT(id) DO UPDATE SET content = excluded.content, edited_at = excluded.edited_at, deleted_at = excluded.deleted_at")
+    .build().execute(pool).await?;
+    Ok(())
 }
 
 pub async fn save_message(msg: &Message, pool: &SqlitePool) -> Result<(), sqlx::Error> {

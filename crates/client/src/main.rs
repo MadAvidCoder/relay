@@ -11,11 +11,15 @@ use ratatui::{
     widgets::{Block, Borders, Padding, Paragraph},
 };
 use ratatui_textarea::TextArea;
+use relay_common::Message;
 use relay_common::{ClientProtocol, Conversation, ServerProtocol, User};
+use sqlx::SqlitePool;
 use std::{collections::HashMap, ops::Deref};
 use tokio::sync::mpsc;
-use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tokio_tungstenite::{connect_async, tungstenite};
 use uuid::Uuid;
+
+use crate::local_db::get_messages;
 
 enum InboundMessage {
     Server(ServerProtocol),
@@ -58,13 +62,18 @@ struct App {
     conversations: Vec<Conversation>,
     connection_status: ConnectionStatus,
     messages: HashMap<Uuid, Vec<Message>>,
+    db: SqlitePool,
     input_mode: InputModes,
     tx: mpsc::Sender<ClientProtocol>,
     rx: mpsc::Receiver<InboundMessage>,
     screen: Screens,
 }
 impl App {
-    fn new(rx: mpsc::Receiver<InboundMessage>, tx: mpsc::Sender<ClientProtocol>) -> Self {
+    fn new(
+        rx: mpsc::Receiver<InboundMessage>,
+        tx: mpsc::Sender<ClientProtocol>,
+        db: SqlitePool,
+    ) -> Self {
         let mut username = TextArea::default();
         username.set_cursor_line_style(Style::default());
         username.set_block(Block::default().borders(Borders::ALL).title("  Username  "));
@@ -75,6 +84,7 @@ impl App {
             running: true,
             rx,
             tx,
+            db,
             cur_conversation: None,
             input_mode: InputModes::Drafting,
             messages: HashMap::new(),
@@ -97,7 +107,12 @@ impl App {
             tokio::select! {
                 Some(msg) = self.rx.recv() => {
                     match msg {
-                        InboundMessage::Server(m) => self.handle_server_message(m),
+                        InboundMessage::Server(m) => {
+                            match self.handle_server_message(m).await {
+                                Ok(_) => {},
+                                Err(_) => println!("Error"),
+                            }
+                        },
                         InboundMessage::Connection(s) => self.connection_status = s,
                     }
                 }
@@ -113,9 +128,9 @@ impl App {
         Ok(())
     }
 
-    fn handle_server_message(&mut self, msg: ServerProtocol) {
+    async fn handle_server_message(&mut self, msg: ServerProtocol) -> Result<()> {
         match msg {
-            ServerProtocol::AuthSuccess { user, timestamp } => {
+            ServerProtocol::AuthSuccess { user, timestamp: _ } => {
                 let mut t = TextArea::default();
                 t.set_block(
                     Block::default()
@@ -126,12 +141,13 @@ impl App {
                     draft: t,
                     user,
                     selected_conv: None,
-                }
+                };
+                self.tx.send(ClientProtocol::GetConversations).await?;
             }
             ServerProtocol::AuthFailure {
-                user_id,
+                user_id: _,
                 reason,
-                timestamp,
+                timestamp: _,
             } => {
                 //TODO: show reason on screen
                 let mut username = TextArea::default();
@@ -157,18 +173,58 @@ impl App {
                 conversation_id,
                 message,
                 timestamp,
-            } => {} // Will add message to local db and show uread noti,
+            } => {
+                let msg = relay_common::Message {
+                    id: message_id,
+                    sender_id,
+                    conversation_id,
+                    content: message,
+                    created_at: timestamp,
+                    edited_at: None,
+                    deleted_at: None,
+                };
+                local_db::save_message(&msg, &self.db).await?;
+                self.messages
+                    .entry(msg.conversation_id)
+                    .or_default()
+                    .push(msg.clone());
+                if let Some(c) = self
+                    .conversations
+                    .iter_mut()
+                    .find(|c| c.id == conversation_id)
+                {
+                    c.latest_message = Some(msg)
+                }
+                //TODO: noti
+            }
             ServerProtocol::Error { code, timestamp } => {} // Handle Error maybe show popover
             ServerProtocol::ConversationList {
                 conversations,
-                timestamp,
-            } => {} // Will update conversations and show them
+                timestamp: _,
+            } => {
+                local_db::save_conversations(&conversations, &self.db).await?;
+                self.conversations = conversations;
+                for conv in &self.conversations {
+                    let history = self.messages.entry(conv.id).or_default();
+                    *history = get_messages(&conv.id, &self.db).await?;
+                }
+            }
             ServerProtocol::MessageHistory {
                 conversation_id,
                 messages,
-                timestamp,
-            } => {} // Will be proccessed with loading
-        }
+                timestamp: _,
+            } => {
+                local_db::save_messages(&messages, &self.db).await?;
+                let history = self.messages.entry(conversation_id).or_default();
+                for msg in messages {
+                    if !history.iter().any(|e| e.id == msg.id) {
+                        history.push(msg);
+                    }
+                }
+                history.sort_by_key(|msg| msg.created_at);
+            }
+        };
+        Ok(())
     }
 
     async fn handle_event(&mut self, event: Event) -> Result<()> {
@@ -403,7 +459,7 @@ async fn main() -> Result<()> {
     let (outbound_tx, mut outbound_rx) = mpsc::channel::<ClientProtocol>(100);
     let (inbound_tx, inbound_rx) = mpsc::channel::<InboundMessage>(100);
 
-    let mut app = App::new(inbound_rx, outbound_tx);
+    let mut app = App::new(inbound_rx, outbound_tx, db);
 
     let websocket_task: tokio::task::JoinHandle<Result<(), Error>> = tokio::spawn(async move {
         let (ws_stream, _) = connect_async("ws://127.0.0.1:3000/ws").await?;
@@ -415,15 +471,15 @@ async fn main() -> Result<()> {
         loop {
             tokio::select!(
                 Some(msg) = outbound_rx.recv() => {
-                    tx.send(Message::Text(msg.to_json()?.into())).await?;
+                    tx.send(tungstenite::Message::Text(msg.to_json()?.into())).await?;
                 },
                 Some(msg) = rx.next() => {
                     match msg {
                         Ok(msg) => match msg {
-                            Message::Close(_) => {
+                            tungstenite::Message::Close(_) => {
                                 break;
                             }
-                            Message::Text(t) => {
+                            tungstenite::Message::Text(t) => {
                                 inbound_tx.send(InboundMessage::Server(ServerProtocol::from_json(t.as_str())?)).await?;
                             },
                             _ => {},

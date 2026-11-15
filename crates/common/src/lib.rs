@@ -1,3 +1,5 @@
+use std::fmt::{self, Display, Formatter};
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -44,6 +46,19 @@ impl Connection {
 pub enum ConversationType {
     DM,
     Group,
+}
+
+impl Display for ConversationType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                ConversationType::DM => "dm",
+                ConversationType::Group => "group",
+            }
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, sqlx::Type)]
