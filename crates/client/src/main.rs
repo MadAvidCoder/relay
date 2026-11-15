@@ -198,7 +198,7 @@ impl App {
                     .iter_mut()
                     .find(|c| c.id == conversation_id)
                 {
-                    c.latest_message = Some(msg)
+                    c.latest_message = history.last().cloned();
                 }
                 //TODO: noti
             }
