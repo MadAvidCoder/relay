@@ -1,18 +1,20 @@
 mod local_db;
 
 use anyhow::{Error, Result};
-use crossterm::event::{Event, EventStream, KeyCode, KeyModifiers};
+use crossterm::event::{Event, EventStream, KeyCode, KeyModifiers, MouseEventKind};
 use futures_util::{SinkExt, StreamExt};
 use ratatui::{
     Frame,
-    layout::{Alignment, Constraint, Layout, Rect},
+    layout::{Alignment, Constraint, Layout, Margin, Rect},
     style::{Color, Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, Borders, Padding, Paragraph},
+    widgets::{
+        Block, Borders, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+    },
 };
 use ratatui_textarea::TextArea;
-use relay_common::Message;
 use relay_common::{ClientProtocol, Conversation, ServerProtocol, User};
+use relay_common::{Message, MessageCursor};
 use sqlx::SqlitePool;
 use std::{collections::HashMap, ops::Deref};
 use tokio::sync::mpsc;
@@ -49,6 +51,7 @@ enum Screens {
         draft: TextArea<'static>,
         user: User,
         selected_conv: Option<Uuid>,
+        scroll: ScrollbarState,
     },
 }
 enum ConnectionStatus {
@@ -58,7 +61,6 @@ enum ConnectionStatus {
 }
 struct App {
     running: bool,
-    cur_conversation: Option<Conversation>,
     conversations: Vec<Conversation>,
     connection_status: ConnectionStatus,
     messages: HashMap<Uuid, Vec<Message>>,
@@ -85,7 +87,6 @@ impl App {
             rx,
             tx,
             db,
-            cur_conversation: None,
             input_mode: InputModes::Drafting,
             messages: HashMap::new(),
             conversations: Vec::new(),
@@ -100,6 +101,7 @@ impl App {
 
     async fn run(&mut self) -> Result<()> {
         let mut term = ratatui::init();
+        crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture)?;
         let mut events = EventStream::new();
 
         let mut tick = tokio::time::interval(std::time::Duration::from_millis(50));
@@ -141,6 +143,7 @@ impl App {
                     draft: t,
                     user,
                     selected_conv: None,
+                    scroll: ScrollbarState::new(0),
                 };
                 self.tx.send(ClientProtocol::GetConversations).await?;
             }
@@ -184,10 +187,12 @@ impl App {
                     deleted_at: None,
                 };
                 local_db::save_message(&msg, &self.db).await?;
-                self.messages
-                    .entry(msg.conversation_id)
-                    .or_default()
-                    .push(msg.clone());
+                let history = self.messages.entry(conversation_id).or_default();
+                if !history.iter().any(|e| e.id == msg.id) {
+                    history.push(msg.clone());
+                }
+                history.sort_by_key(|msg| (msg.created_at, msg.id));
+
                 if let Some(c) = self
                     .conversations
                     .iter_mut()
@@ -203,10 +208,26 @@ impl App {
                 timestamp: _,
             } => {
                 local_db::save_conversations(&conversations, &self.db).await?;
+                if let Screens::Main { scroll, .. } = &mut self.screen {
+                    *scroll = scroll.content_length(conversations.len());
+                }
                 self.conversations = conversations;
                 for conv in &self.conversations {
                     let history = self.messages.entry(conv.id).or_default();
                     *history = get_messages(&conv.id, &self.db).await?;
+
+                    self.tx
+                        .send(ClientProtocol::GetMessages {
+                            conversation_id: conv.id,
+                            limit: 100,
+                            after: history.iter().max_by_key(|m| m.created_at).map(|l| {
+                                MessageCursor {
+                                    created_at: l.created_at,
+                                    id: l.id,
+                                }
+                            }),
+                        })
+                        .await?;
                 }
             }
             ServerProtocol::MessageHistory {
@@ -221,7 +242,15 @@ impl App {
                         history.push(msg);
                     }
                 }
-                history.sort_by_key(|msg| msg.created_at);
+                history.sort_by_key(|msg| (msg.created_at, msg.id));
+                if let Some(c) = self
+                    .conversations
+                    .iter_mut()
+                    .find(|c| c.id == conversation_id)
+                    && let Some(latest_msg) = history.last()
+                {
+                    c.latest_message = Some(latest_msg.clone());
+                }
             }
         };
         Ok(())
@@ -234,6 +263,7 @@ impl App {
                 || (key.code == KeyCode::Esc))
         {
             self.running = false;
+            return Ok(());
         }
         let mut change_screen = None;
         match &mut self.screen {
@@ -282,8 +312,23 @@ impl App {
                 draft,
                 user: _,
                 selected_conv: _,
+                scroll,
             } => {
-                if self.input_mode == InputModes::Drafting {
+                if let Event::Mouse(e) = event {
+                    match e.kind {
+                        MouseEventKind::ScrollUp => {
+                            scroll.prev();
+                            scroll.prev();
+                            scroll.prev();
+                        }
+                        MouseEventKind::ScrollDown => {
+                            scroll.next();
+                            scroll.next();
+                            scroll.next();
+                        }
+                        _ => {}
+                    }
+                } else if self.input_mode == InputModes::Drafting {
                     draft.input(event);
                 }
             }
@@ -294,14 +339,38 @@ impl App {
         Ok(())
     }
 
-    fn draw_conv_list(frame: &mut Frame, area: Rect, _sel: &Option<Uuid>) {
+    fn draw_conv_list(
+        frame: &mut Frame,
+        area: Rect,
+        conversations: &[Conversation],
+        _sel: &Option<Uuid>,
+        bar: &mut ScrollbarState,
+    ) {
+        let [scrollbar_area, _, content_area] = Layout::horizontal([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(0),
+        ])
+        .areas(area);
+        frame.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalLeft),
+            scrollbar_area,
+            bar,
+        );
         frame.render_widget(
-            Paragraph::new("Hello World").block(
+            Paragraph::new(
+                conversations
+                    .iter()
+                    .map(|conv| Line::from(conv.name.as_deref().unwrap_or("")))
+                    .collect::<Vec<Line>>(),
+            )
+            .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .title("Conversations"),
-            ),
-            area,
+            )
+            .scroll((bar.get_position() as u16, 0)),
+            content_area,
         );
     }
 
@@ -330,6 +399,7 @@ impl App {
                 draft,
                 user,
                 selected_conv,
+                scroll,
             } => {
                 let cols = Layout::horizontal(vec![
                     Constraint::Percentage(15),
@@ -348,7 +418,13 @@ impl App {
                 ])
                 .split(cols[1]);
 
-                Self::draw_conv_list(frame, l_rows[0], selected_conv);
+                Self::draw_conv_list(
+                    frame,
+                    l_rows[0],
+                    self.conversations.as_ref(),
+                    selected_conv,
+                    scroll,
+                );
                 Self::draw_name(frame, l_rows[1], &user.username);
                 Self::draw_messages(frame, rows[0]);
                 Self::draw_input(frame, rows[1], draft.deref());
@@ -462,6 +538,9 @@ async fn main() -> Result<()> {
     let mut app = App::new(inbound_rx, outbound_tx, db);
 
     let websocket_task: tokio::task::JoinHandle<Result<(), Error>> = tokio::spawn(async move {
+        inbound_tx
+            .send(InboundMessage::Connection(ConnectionStatus::Connecting))
+            .await?;
         let (ws_stream, _) = connect_async("ws://127.0.0.1:3000/ws").await?;
         let (mut tx, mut rx) = ws_stream.split();
         inbound_tx
@@ -473,9 +552,9 @@ async fn main() -> Result<()> {
                 Some(msg) = outbound_rx.recv() => {
                     tx.send(tungstenite::Message::Text(msg.to_json()?.into())).await?;
                 },
-                Some(msg) = rx.next() => {
+                msg = rx.next() => {
                     match msg {
-                        Ok(msg) => match msg {
+                        Some(Ok(msg)) => match msg {
                             tungstenite::Message::Close(_) => {
                                 break;
                             }
@@ -484,22 +563,29 @@ async fn main() -> Result<()> {
                             },
                             _ => {},
                         },
-                        Err(_) => {
+                        Some(Err(_)) => {
+                            break;
+                        },
+                        None => {
                             break;
                         }
                     }
                 },
                 else => {
-                    inbound_tx.send(InboundMessage::Connection(ConnectionStatus::Disconnected)).await?;
+                    break;
                 }
             )
         }
+        inbound_tx
+            .send(InboundMessage::Connection(ConnectionStatus::Disconnected))
+            .await?;
 
         Ok(())
     });
 
     let res = app.run().await;
 
+    crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture)?;
     ratatui::restore();
     websocket_task.abort();
 

@@ -98,18 +98,20 @@ pub async fn save_conversations(
     convs: &Vec<Conversation>,
     pool: &SqlitePool,
 ) -> anyhow::Result<()> {
-    sqlx::QueryBuilder::new(
-        "INSERT INTO conversations (id, name, type, last_message_at, created_at) ",
-    ).push_values(convs, |mut b, conv| {
-        b.push(conv.id.to_string())
-            .push_bind(&conv.name)
-            .push_bind(conv.conversation_type.to_string())
-            .push_bind(conv.latest_message.as_ref().map(|f| f.created_at.to_rfc3339()))
-            .push_bind(conv.created_at.to_rfc3339());
-    })
-    .push("ON CONFLICT(id) DO UPDATE SET name = excluded.name, last_message_at = excluded.last_message_at")
-    .build()
-    .execute(pool).await?;
+    if !convs.is_empty() {
+        sqlx::QueryBuilder::new(
+            "INSERT INTO conversations (id, name, type, last_message_at, created_at) ",
+        ).push_values(convs, |mut b, conv| {
+            b.push(conv.id.to_string())
+                .push_bind(&conv.name)
+                .push_bind(conv.conversation_type.to_string())
+                .push_bind(conv.latest_message.as_ref().map(|f| f.created_at.to_rfc3339()))
+                .push_bind(conv.created_at.to_rfc3339());
+        })
+        .push("ON CONFLICT(id) DO UPDATE SET name = excluded.name, last_message_at = excluded.last_message_at")
+        .build()
+        .execute(pool).await?;
+    }
 
     Ok(())
 }
@@ -137,9 +139,12 @@ pub async fn save_conversation(conv: &Conversation, pool: &SqlitePool) -> Result
     .execute(pool)
     .await?;
 
-    sqlx::QueryBuilder::new("INSERT INTO contacts (user_id, username, display_name, added_at) ")
+    if !conv.users.is_empty() {
+        sqlx::QueryBuilder::new(
+            "INSERT INTO contacts (user_id, username, display_name, added_at) ",
+        )
         .push_values(&conv.users, |mut b, user| {
-            b.push_bind(conv.id.to_string())
+            b.push_bind(user.id.to_string())
                 .push_bind(&user.username)
                 .push_bind(Some(&user.display_name).filter(|a| !a.is_empty()))
                 .push_bind(Utc::now().to_rfc3339());
@@ -149,15 +154,16 @@ pub async fn save_conversation(conv: &Conversation, pool: &SqlitePool) -> Result
         .execute(pool)
         .await?;
 
-    sqlx::QueryBuilder::new("INSERT INTO conversation_members (conversation_id, user_id) ")
-        .push_values(&conv.users, |mut b, user| {
-            b.push_bind(conv.id.to_string())
-                .push_bind(user.id.to_string());
-        })
-        .push("ON CONFLICT (conversation_id, user_id) DO NOTHING")
-        .build()
-        .execute(pool)
-        .await?;
+        sqlx::QueryBuilder::new("INSERT INTO conversation_members (conversation_id, user_id) ")
+            .push_values(&conv.users, |mut b, user| {
+                b.push_bind(conv.id.to_string())
+                    .push_bind(user.id.to_string());
+            })
+            .push("ON CONFLICT (conversation_id, user_id) DO NOTHING")
+            .build()
+            .execute(pool)
+            .await?;
+    }
 
     Ok(())
 }
@@ -235,10 +241,12 @@ pub async fn get_conversation(
                 .with_timezone(&Utc),
                 edited_at: req
                     .edited_at
-                    .and_then(|f| Some(DateTime::parse_from_rfc3339(&f).ok()?.with_timezone(&Utc))),
+                    .map(|f| DateTime::parse_from_rfc3339(&f).map(|a| a.with_timezone(&Utc)))
+                    .transpose()?,
                 deleted_at: req
                     .deleted_at
-                    .and_then(|a| Some(DateTime::parse_from_rfc3339(&a).ok()?.with_timezone(&Utc))),
+                    .map(|a| DateTime::parse_from_rfc3339(&a).map(|a| a.with_timezone(&Utc)))
+                    .transpose()?,
             }),
             None => None,
         },
@@ -256,27 +264,29 @@ pub async fn delete_conversation(conv_id: &Uuid, pool: &SqlitePool) -> Result<()
 }
 
 pub async fn save_messages(msgs: &Vec<Message>, pool: &SqlitePool) -> anyhow::Result<()> {
-    sqlx::QueryBuilder::new(
-        r#"INSERT INTO messages (
-            id,
-            conversation_id,
-            sender_id,
-            content,
-            created_at,
-            edited_at,
-            deleted_at
-        ) "#,
-    )
-    .push_values(msgs, |mut b, m| {
-        b.push_bind(m.id.to_string())
-            .push_bind(m.conversation_id.to_string())
-            .push_bind(m.sender_id.to_string())
-            .push_bind(&m.content)
-            .push_bind(m.created_at.to_rfc3339())
-            .push_bind(m.edited_at.map(|f| f.to_rfc3339()))
-            .push_bind(m.deleted_at.map(|f| f.to_rfc3339()));
-    }).push("ON CONFLICT(id) DO UPDATE SET content = excluded.content, edited_at = excluded.edited_at, deleted_at = excluded.deleted_at")
-    .build().execute(pool).await?;
+    if !msgs.is_empty() {
+        sqlx::QueryBuilder::new(
+            r#"INSERT INTO messages (
+                id,
+                conversation_id,
+                sender_id,
+                content,
+                created_at,
+                edited_at,
+                deleted_at
+            ) "#,
+        )
+        .push_values(msgs, |mut b, m| {
+            b.push_bind(m.id.to_string())
+                .push_bind(m.conversation_id.to_string())
+                .push_bind(m.sender_id.to_string())
+                .push_bind(&m.content)
+                .push_bind(m.created_at.to_rfc3339())
+                .push_bind(m.edited_at.map(|f| f.to_rfc3339()))
+                .push_bind(m.deleted_at.map(|f| f.to_rfc3339()));
+        }).push("ON CONFLICT(id) DO UPDATE SET content = excluded.content, edited_at = excluded.edited_at, deleted_at = excluded.deleted_at")
+        .build().execute(pool).await?;
+    }
     Ok(())
 }
 
