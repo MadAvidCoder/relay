@@ -5,11 +5,11 @@ use crossterm::event::{Event, EventStream, KeyCode, KeyModifiers, MouseEventKind
 use futures_util::{SinkExt, StreamExt};
 use ratatui::{
     Frame,
-    layout::{Alignment, Constraint, Layout, Margin, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
     style::{Color, Style, Stylize},
     text::{Line, Span},
     widgets::{
-        Block, Borders, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+        Block, Borders, Clear, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
     },
 };
 use ratatui_textarea::TextArea;
@@ -59,6 +59,12 @@ enum ConnectionStatus {
     Connecting,
     Connected,
 }
+
+struct Popup {
+    title: String,
+    message: String,
+}
+
 struct App {
     running: bool,
     conversations: Vec<Conversation>,
@@ -69,6 +75,7 @@ struct App {
     tx: mpsc::Sender<ClientProtocol>,
     rx: mpsc::Receiver<InboundMessage>,
     screen: Screens,
+    popup: Option<Popup>,
 }
 impl App {
     fn new(
@@ -84,6 +91,7 @@ impl App {
         password.set_block(Block::default().borders(Borders::ALL).title("  Password  "));
         Self {
             running: true,
+            popup: None,
             rx,
             tx,
             db,
@@ -112,7 +120,10 @@ impl App {
                         Some(InboundMessage::Server(m)) => {
                             match self.handle_server_message(m).await {
                                 Ok(_) => {},
-                                Err(_) => println!("Error"),
+                                Err(e) => self.popup = Some(Popup {
+                                    title: "Server Error".to_string(),
+                                    message: e.to_string()
+                                }),
                             }
                         },
                         Some(InboundMessage::Connection(s)) => self.connection_status = s,
@@ -259,6 +270,14 @@ impl App {
     }
 
     async fn handle_event(&mut self, event: Event) -> Result<()> {
+        if self.popup.is_some()
+            && let Event::Key(k) = event
+            && k.is_press()
+            && ([KeyCode::Char(' '), KeyCode::Enter, KeyCode::Esc].contains(&k.code))
+        {
+            self.popup = None;
+            return Ok(());
+        }
         if let Event::Key(key) = event
             && key.is_press()
             && ((key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
@@ -395,6 +414,44 @@ impl App {
         frame.render_widget(Paragraph::new(username).centered(), area);
     }
 
+    fn draw_popup(frame: &mut Frame, pop: &Popup) {
+        let area = frame
+            .area()
+            .centered(Constraint::Percentage(50), Constraint::Length(7));
+        frame.render_widget(Clear, area);
+
+        let block = Block::default()
+            .title(format!(" {} ", pop.title))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Yellow))
+            .style(Style::default().bg(Color::Black));
+        let inner = block.inner(area);
+
+        frame.render_widget(block, area);
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(1), Constraint::Length(1)])
+            .split(inner);
+
+        frame.render_widget(
+            Paragraph::new(pop.message.as_str())
+                .centered()
+                .style(Style::default().bg(Color::Black)),
+            chunks[0],
+        );
+        frame.render_widget(
+            Paragraph::new("Press Space or Enter to close")
+                .centered()
+                .style(
+                    Style::default()
+                        .italic()
+                        .fg(Color::Gray)
+                        .bg(Color::Black),
+                ),
+            chunks[1],
+        );
+    }
+
     fn draw(&mut self, frame: &mut Frame) {
         match &mut self.screen {
             Screens::Main {
@@ -404,14 +461,14 @@ impl App {
                 scroll,
             } => {
                 let cols = Layout::horizontal(vec![
-                    Constraint::Percentage(15),
-                    Constraint::Percentage(80),
+                    Constraint::Percentage(18),
+                    Constraint::Percentage(82),
                 ])
                 .split(frame.area());
                 let l_rows = Layout::vertical(vec![
                     Constraint::Percentage(100),
-                    Constraint::Min(1),
                     Constraint::Length(1),
+                    Constraint::Min(1),
                 ])
                 .split(cols[0]);
                 let rows = Layout::vertical(vec![
@@ -527,6 +584,9 @@ impl App {
                     vert[5],
                 );
             }
+        }
+        if let Some(pop) = &self.popup {
+            Self::draw_popup(frame, pop);
         }
     }
 }
