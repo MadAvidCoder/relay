@@ -107,7 +107,7 @@ pub async fn save_conversations(convs: &[Conversation], pool: &SqlitePool) -> an
                 .push_bind(conv.latest_message.as_ref().map(|f| f.created_at.to_rfc3339()))
                 .push_bind(conv.created_at.to_rfc3339());
         })
-        .push("ON CONFLICT(id) DO UPDATE SET name = excluded.name, last_message_at = excluded.last_message_at")
+        .push("ON CONFLICT(id) DO UPDATE SET name = excluded.name, type = excluded.type, last_message_at = COALESCE(excluded.last_message_at, conversations.last_message_at)")
         .build()
         .execute(&mut *trans).await?;
 
@@ -135,8 +135,7 @@ pub async fn save_conversations(convs: &[Conversation], pool: &SqlitePool) -> an
 
             sqlx::QueryBuilder::new("INSERT INTO conversation_members (conversation_id, user_id) ")
                 .push_values(memberships, |mut b, (conv, user)| {
-                    b.push_bind(conv.to_string())
-                        .push_bind(user.to_string());
+                    b.push_bind(conv.to_string()).push_bind(user.to_string());
                 })
                 .push("ON CONFLICT (conversation_id, user_id) DO NOTHING")
                 .build()
@@ -159,7 +158,7 @@ pub async fn save_conversation(conv: &Conversation, pool: &SqlitePool) -> Result
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 type = excluded.type,
-                last_message_at = excluded.last_message_at"#,
+                last_message_at = COALESCE(excluded.last_message_at, conversations.last_message_at)"#,
         &conv.id.to_string(),
         &conv.name,
         match conv.conversation_type {
