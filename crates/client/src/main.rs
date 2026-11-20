@@ -40,6 +40,31 @@ enum LoginFields {
     Username,
     Password,
 }
+
+#[derive(Debug, PartialEq, Copy, Clone)]
+enum FocusPoints {
+    Conversations,
+    Messages,
+    Draft,
+}
+
+impl FocusPoints {
+    fn next(self) -> Self {
+        match self {
+            Self::Conversations => Self::Messages,
+            Self::Messages => Self::Draft,
+            Self::Draft => Self::Conversations,
+        }
+    }
+    fn prev(self) -> Self {
+        match self {
+            Self::Conversations => Self::Draft,
+            Self::Messages => Self::Conversations,
+            Self::Draft => Self::Messages,
+        }
+    }
+}
+
 enum Screens {
     Login {
         username: TextArea<'static>,
@@ -50,6 +75,7 @@ enum Screens {
     Main {
         draft: TextArea<'static>,
         user: User,
+        focus: FocusPoints,
         selected_conv: Option<Uuid>,
         scroll: ScrollbarState,
     },
@@ -156,6 +182,7 @@ impl App {
                     user,
                     selected_conv: None,
                     scroll: ScrollbarState::new(0),
+                    focus: FocusPoints::Conversations,
                 };
                 self.tx.send(ClientProtocol::GetConversations).await?;
             }
@@ -164,7 +191,11 @@ impl App {
                 reason,
                 timestamp: _,
             } => {
-                //TODO: show reason on screen
+                self.popup = Some(Popup {
+                    title: "Auth Failed".to_string(),
+                    message: reason.to_string(),
+                });
+
                 let mut username = TextArea::default();
                 username.set_cursor_line_style(Style::default());
                 username.set_block(Block::default().borders(Borders::ALL).title("  Username  "));
@@ -332,10 +363,21 @@ impl App {
             Screens::Main {
                 draft,
                 user: _,
-                selected_conv: _,
+                selected_conv,
+                focus,
                 scroll,
             } => {
-                if let Event::Mouse(e) = event {
+                if let Event::Key(k) = event
+                    && k.is_press()
+                    && k.code == KeyCode::Tab
+                {
+                    *focus = focus.next();
+                } else if let Event::Key(k) = event
+                    && k.is_press()
+                    && k.code == KeyCode::BackTab
+                {
+                    *focus = focus.prev();
+                } else if let Event::Mouse(e) = event {
                     match e.kind {
                         MouseEventKind::ScrollUp => {
                             scroll.prev();
@@ -349,7 +391,50 @@ impl App {
                         }
                         _ => {}
                     }
-                } else if self.input_mode == InputModes::Drafting {
+                } else if let Event::Key(k) = event
+                    && k.is_press()
+                    && *focus == FocusPoints::Conversations
+                    && k.code == KeyCode::Down
+                {
+                    if let Some(sel) = selected_conv
+                        && !self.conversations.is_empty()
+                    {
+                        *selected_conv = Some(
+                            self.conversations
+                                .get(
+                                    self.conversations
+                                        .iter()
+                                        .position(|x| x.id == *sel)
+                                        .unwrap_or(0)
+                                        .saturating_add(1)
+                                        .min(self.conversations.len().saturating_sub(1)),
+                                )
+                                .unwrap_or(self.conversations.last().unwrap())
+                                .id,
+                        )
+                    }
+                } else if let Event::Key(k) = event
+                    && k.is_press()
+                    && *focus == FocusPoints::Conversations
+                    && k.code == KeyCode::Up
+                {
+                    if let Some(sel) = selected_conv
+                        && !self.conversations.is_empty()
+                    {
+                        *selected_conv = Some(
+                            self.conversations
+                                .get(
+                                    self.conversations
+                                        .iter()
+                                        .position(|x| x.id == *sel)
+                                        .unwrap_or(0)
+                                        .saturating_sub(1),
+                                )
+                                .unwrap_or(self.conversations.first().unwrap())
+                                .id,
+                        )
+                    }
+                } else if self.input_mode == InputModes::Drafting && *focus == FocusPoints::Draft {
                     draft.input(event);
                 }
             }
@@ -363,8 +448,9 @@ impl App {
     fn draw_conv_list(
         frame: &mut Frame,
         area: Rect,
+        focused: bool,
         conversations: &[Conversation],
-        _sel: &Option<Uuid>,
+        sel: &Option<Uuid>,
         bar: &mut ScrollbarState,
     ) {
         let [scrollbar_area, _, content_area] = Layout::horizontal([
@@ -382,12 +468,29 @@ impl App {
             Paragraph::new(
                 conversations
                     .iter()
-                    .map(|conv| Line::from(conv.name.as_deref().unwrap_or("")))
+                    .map(|conv| {
+                        Line::from(conv.name.as_deref().unwrap_or("")).style(
+                            Style::default().bold().fg(
+                                if let Some(sel) = sel
+                                    && &conv.id == sel
+                                {
+                                    Color::LightCyan
+                                } else {
+                                    Color::default()
+                                },
+                            ),
+                        )
+                    })
                     .collect::<Vec<Line>>(),
             )
             .block(
                 Block::default()
                     .borders(Borders::ALL)
+                    .border_style(if focused {
+                        Style::default().yellow()
+                    } else {
+                        Style::default()
+                    })
                     .title("Conversations"),
             )
             .scroll((bar.get_position() as u16, 0)),
@@ -395,19 +498,35 @@ impl App {
         );
     }
 
-    fn draw_messages(frame: &mut Frame, area: Rect) {
+    fn draw_messages(frame: &mut Frame, focused: bool, area: Rect) {
         frame.render_widget(
             Paragraph::new("Hello World").block(
                 Block::default()
                     .borders(Borders::ALL)
+                    .border_style(if focused {
+                        Style::default().yellow()
+                    } else {
+                        Style::default()
+                    })
                     .title("Main Message Area"),
             ),
             area,
         );
     }
 
-    fn draw_input(frame: &mut Frame, area: Rect, draft: &TextArea) {
-        frame.render_widget(draft, area);
+    fn draw_input(frame: &mut Frame, area: Rect, focused: bool, draft: &mut TextArea) {
+        draft.set_block(
+            draft
+                .block()
+                .cloned()
+                .unwrap_or(Block::default())
+                .border_style(if focused {
+                    Style::default().yellow()
+                } else {
+                    Style::default()
+                }),
+        );
+        frame.render_widget(&*draft, area);
     }
 
     fn draw_name(frame: &mut Frame, area: Rect, username: &str) {
@@ -442,12 +561,7 @@ impl App {
         frame.render_widget(
             Paragraph::new("Press Space or Enter to close")
                 .centered()
-                .style(
-                    Style::default()
-                        .italic()
-                        .fg(Color::Gray)
-                        .bg(Color::Black),
-                ),
+                .style(Style::default().italic().fg(Color::Gray).bg(Color::Black)),
             chunks[1],
         );
     }
@@ -457,6 +571,7 @@ impl App {
             Screens::Main {
                 draft,
                 user,
+                focus,
                 selected_conv,
                 scroll,
             } => {
@@ -480,13 +595,14 @@ impl App {
                 Self::draw_conv_list(
                     frame,
                     l_rows[0],
+                    *focus == FocusPoints::Conversations,
                     self.conversations.as_ref(),
                     selected_conv,
                     scroll,
                 );
                 Self::draw_name(frame, l_rows[1], &user.username);
-                Self::draw_messages(frame, rows[0]);
-                Self::draw_input(frame, rows[1], draft.deref());
+                Self::draw_messages(frame, *focus == FocusPoints::Messages, rows[0]);
+                Self::draw_input(frame, rows[1], *focus == FocusPoints::Draft, draft);
             }
             Screens::Loading => {
                 frame.render_widget(

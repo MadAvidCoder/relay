@@ -161,8 +161,20 @@ pub enum AuthError {
     UserNotFound,
     AlreadyAuthenticated,
     AlreadyConnected,
-    Unauthorized,
+    Unauthorised,
     UnknownError,
+}
+impl fmt::Display for AuthError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidCredentials => write!(f, "Invalid username or password. Please try again."),
+            Self::UserNotFound => write!(f, "Username not found. Please create an account."),
+            Self::AlreadyAuthenticated => write!(f, "This client has already been authenticated. Start a new session to log in again."),
+            Self::AlreadyConnected => write!(f, "Only one session per user is currently supported"),
+            Self::Unauthorised => write!(f, "Unauthorised"),
+            Self::UnknownError => write!(f, "An unknown error has occurred"),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
