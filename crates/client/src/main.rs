@@ -67,13 +67,13 @@ impl FocusPoints {
 
 enum Screens {
     Login {
-        username: TextArea<'static>,
-        password: TextArea<'static>,
+        username: Box<TextArea<'static>>,
+        password: Box<TextArea<'static>>,
         active: LoginFields,
     },
     Loading,
     Main {
-        draft: TextArea<'static>,
+        draft: Box<TextArea<'static>>,
         user: User,
         focus: FocusPoints,
         selected_conv: Option<Uuid>,
@@ -109,10 +109,10 @@ impl App {
         tx: mpsc::Sender<ClientProtocol>,
         db: SqlitePool,
     ) -> Self {
-        let mut username = TextArea::default();
+        let mut username = Box::new(TextArea::default());
         username.set_cursor_line_style(Style::default());
         username.set_block(Block::default().borders(Borders::ALL).title("  Username  "));
-        let mut password = TextArea::default();
+        let mut password = Box::new(TextArea::default());
         password.set_cursor_line_style(Style::default());
         password.set_block(Block::default().borders(Borders::ALL).title("  Password  "));
         Self {
@@ -171,7 +171,7 @@ impl App {
     async fn handle_server_message(&mut self, msg: ServerProtocol) -> Result<()> {
         match msg {
             ServerProtocol::AuthSuccess { user, timestamp: _ } => {
-                let mut t = TextArea::default();
+                let mut t = Box::new(TextArea::default());
                 t.set_block(
                     Block::default()
                         .borders(Borders::ALL)
@@ -196,10 +196,10 @@ impl App {
                     message: reason.to_string(),
                 });
 
-                let mut username = TextArea::default();
+                let mut username = Box::new(TextArea::default());
                 username.set_cursor_line_style(Style::default());
                 username.set_block(Block::default().borders(Borders::ALL).title("  Username  "));
-                let mut password = TextArea::default();
+                let mut password = Box::new(TextArea::default());
                 password.set_cursor_line_style(Style::default());
                 password.set_block(Block::default().borders(Borders::ALL).title("  Password  "));
 
@@ -683,8 +683,8 @@ impl App {
                             Color::DarkGray
                         })),
                 );
-                frame.render_widget(username.deref(), centre[1]);
-                frame.render_widget(password.deref(), centre_password[1]);
+                frame.render_widget(&**username, centre[1]);
+                frame.render_widget(&**password, centre_password[1]);
                 frame.render_widget(
                     Paragraph::new(Line::from(vec![
                         Span::styled("TAB", Style::default().bold()),
