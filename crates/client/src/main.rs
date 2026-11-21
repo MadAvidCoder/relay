@@ -184,7 +184,7 @@ impl App {
         match msg {
             ServerProtocol::AuthSuccess { user, timestamp: _ } => {
                 let mut t = Box::new(TextArea::default());
-                t.set_line_number_style(Style::default());
+                t.set_cursor_line_style(Style::default());
                 t.set_block(
                     Block::default()
                         .borders(Borders::ALL)
