@@ -12,7 +12,7 @@ use ratatui::{
         Block, Borders, Clear, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
     },
 };
-use ratatui_textarea::TextArea;
+use ratatui_textarea::{Key, TextArea};
 use relay_common::{ClientProtocol, Conversation, ServerProtocol, User};
 use relay_common::{Message, MessageCursor};
 use sqlx::SqlitePool;
@@ -65,6 +65,17 @@ impl FocusPoints {
     }
 }
 
+enum CommandMode {
+    Search,
+    Command,
+}
+
+struct CommandPalette {
+    text: Box<TextArea<'static>>,
+    selection: Option<usize>,
+    mode: CommandMode,
+}
+
 enum Screens {
     Login {
         username: Box<TextArea<'static>>,
@@ -78,6 +89,7 @@ enum Screens {
         focus: FocusPoints,
         selected_conv: Option<Uuid>,
         scroll: ScrollbarState,
+        palette: Option<CommandPalette>,
     },
 }
 enum ConnectionStatus {
@@ -172,6 +184,7 @@ impl App {
         match msg {
             ServerProtocol::AuthSuccess { user, timestamp: _ } => {
                 let mut t = Box::new(TextArea::default());
+                t.set_line_number_style(Style::default());
                 t.set_block(
                     Block::default()
                         .borders(Borders::ALL)
@@ -183,6 +196,7 @@ impl App {
                     selected_conv: None,
                     scroll: ScrollbarState::new(0),
                     focus: FocusPoints::Conversations,
+                    palette: None,
                 };
                 self.tx.send(ClientProtocol::GetConversations).await?;
             }
@@ -301,20 +315,19 @@ impl App {
     }
 
     async fn handle_event(&mut self, event: Event) -> Result<()> {
+        if let Event::Key(key) = event
+            && key.is_press()
+            && (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
+        {
+            self.running = false;
+            return Ok(());
+        }
         if self.popup.is_some()
             && let Event::Key(k) = event
             && k.is_press()
             && ([KeyCode::Char(' '), KeyCode::Enter, KeyCode::Esc].contains(&k.code))
         {
             self.popup = None;
-            return Ok(());
-        }
-        if let Event::Key(key) = event
-            && key.is_press()
-            && ((key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
-                || (key.code == KeyCode::Esc))
-        {
-            self.running = false;
             return Ok(());
         }
         let mut change_screen = None;
@@ -366,8 +379,35 @@ impl App {
                 selected_conv,
                 focus,
                 scroll,
+                palette,
             } => {
                 if let Event::Key(k) = event
+                    && k.is_press()
+                    && k.code == KeyCode::Char('k')
+                    && k.modifiers.contains(KeyModifiers::CONTROL)
+                {
+                    if palette.is_some() {
+                        *palette = None;
+                    } else {
+                        let mut t = Box::new(TextArea::default());
+                        t.set_cursor_line_style(Style::default());
+                        t.set_block(Block::default().borders(Borders::BOTTOM));
+                        *palette = Some(CommandPalette {
+                            text: t,
+                            selection: None,
+                            mode: CommandMode::Command,
+                        })
+                    }
+                } else if let Some(p) = palette {
+                    if let Event::Key(k) = event
+                        && k.is_press()
+                        && k.code == KeyCode::Esc
+                    {
+                        *palette = None;
+                    } else {
+                        p.text.input(event);
+                    }
+                } else if let Event::Key(k) = event
                     && k.is_press()
                     && k.code == KeyCode::Tab
                 {
@@ -566,6 +606,38 @@ impl App {
         );
     }
 
+    fn draw_palette(frame: &mut Frame, p: &CommandPalette) {
+        let area = frame
+            .area()
+            .centered(Constraint::Percentage(50), Constraint::Max(12));
+        frame.render_widget(Clear, area);
+        let block = Block::default()
+            .title(" Command Palette ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Yellow))
+            .style(Style::default().bg(Color::Black));
+        frame.render_widget(&block, area);
+
+        let inner = block.inner(area);
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(2),
+                Constraint::Fill(1),
+                Constraint::Length(2),
+            ])
+            .split(inner);
+        frame.render_widget(&*p.text, chunks[0]);
+        frame.render_widget(Paragraph::new("TBD ig"), chunks[1]);
+        frame.render_widget(
+            Paragraph::new("%: Search | Enter: select | ↑/↓: navigate | Esc: close")
+                .style(Style::default().italic().gray())
+                .block(Block::default().borders(Borders::TOP))
+                .centered(),
+            chunks[2],
+        );
+    }
+
     fn draw(&mut self, frame: &mut Frame) {
         match &mut self.screen {
             Screens::Main {
@@ -574,6 +646,7 @@ impl App {
                 focus,
                 selected_conv,
                 scroll,
+                palette,
             } => {
                 let cols = Layout::horizontal(vec![
                     Constraint::Percentage(18),
@@ -603,6 +676,9 @@ impl App {
                 Self::draw_name(frame, l_rows[1], &user.username);
                 Self::draw_messages(frame, *focus == FocusPoints::Messages, rows[0]);
                 Self::draw_input(frame, rows[1], *focus == FocusPoints::Draft, draft);
+                if let Some(palette) = palette {
+                    Self::draw_palette(frame, palette)
+                }
             }
             Screens::Loading => {
                 frame.render_widget(
