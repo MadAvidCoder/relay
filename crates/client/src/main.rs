@@ -405,7 +405,13 @@ impl App {
                     {
                         *palette = None;
                     } else {
-                        p.text.input(event);
+                        if let Event::Key(k) = event
+                            && k.is_press()
+                            && (k.code == KeyCode::Enter || k.code == KeyCode::Tab)
+                        {
+                        } else {
+                            p.text.input(event);
+                        }
                     }
                 } else if let Event::Key(k) = event
                     && k.is_press()
