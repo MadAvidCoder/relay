@@ -103,46 +103,23 @@ enum Screens {
 enum Command {
     #[strum(to_string = "New Conversation")]
     NewConv,
-    #[strum(to_string = "Test")]
-    Test,
-    #[strum(to_string = "Testing")]
-    Testing,
-    #[strum(to_string = "Testing This")]
-    Testhis,
-    #[strum(to_string = "Random abc123")]
-    Rand,
-    #[strum(to_string = "#*&n1ui")]
-    Uhhh,
-    #[strum(to_string = "one")]
-    One,
-    #[strum(to_string = "ONE")]
-    Onec,
-    #[strum(to_string = "two")]
-    Two,
-    #[strum(to_string = "three")]
-    Three,
-    #[strum(to_string = "four")]
-    Four,
-    #[strum(to_string = "five")]
-    Five,
 }
 
 impl Command {
     fn all() -> Vec<Self> {
-        vec![
-            Self::NewConv,
-            Self::Test,
-            Self::Testing,
-            Self::Testhis,
-            Self::Rand,
-            Self::Uhhh,
-            Self::One,
-            Self::Onec,
-            Self::Two,
-            Self::Three,
-            Self::Four,
-            Self::Five,
-        ]
+        vec![Self::NewConv]
+    }
+
+    fn execute(&self, app: &mut App) -> Result<()> {
+        match self {
+            Command::NewConv => {
+                app.popup = Some(Popup {
+                    title: "New Conversation".to_string(),
+                    message: "TBA".to_string(),
+                });
+                Ok(())
+            }
+        }
     }
 
     fn ranked(query: &str, thresh: f64) -> Vec<Self> {
@@ -477,7 +454,7 @@ impl App {
                         *palette = Some(CommandPalette {
                             text: t,
                             scroll: ScrollbarState::new(all.len()).viewport_content_length(10),
-                            selection: None,
+                            selection: all.first().copied(),
                             results: all,
                             mode: CommandMode::Command,
                         })
@@ -526,8 +503,18 @@ impl App {
                                         p.selection = p.results.first().copied();
                                     }
                                 }
-                                KeyCode::Enter => {} // Exec command
-                                KeyCode::Tab => {}   // nothing
+                                KeyCode::Enter => {
+                                    if let Some(sel) = p.selection {
+                                        *palette = None;
+                                        sel.execute(self).unwrap_or_else(|err| {
+                                            self.popup = Some(Popup {
+                                                title: "Error".to_string(),
+                                                message: err.to_string(),
+                                            })
+                                        });
+                                    }
+                                } // Exec command
+                                KeyCode::Tab => {} // nothing
                                 _ => {
                                     p.text.input(event);
                                     p.results = Command::ranked(&p.text.lines()[0], 0.65);
