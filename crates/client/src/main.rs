@@ -782,6 +782,11 @@ impl App {
                 p.scroll = p.scroll.position(pos - (res_chunks[2].height as usize) + 1);
             }
         };
+        p.scroll = p.scroll.position(
+            p.scroll
+                .get_position()
+                .min(p.results.len().saturating_sub((res_chunks[2].height) as usize)),
+        );
 
         frame.render_stateful_widget(
             Scrollbar::new(ScrollbarOrientation::VerticalLeft),
