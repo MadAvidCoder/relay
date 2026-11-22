@@ -531,10 +531,8 @@ impl App {
                                 _ => {
                                     p.text.input(event);
                                     p.results = Command::ranked(&p.text.lines()[0], 0.65);
-                                    if let Some(sel) = &p.selection
-                                        && !p.results.contains(sel)
-                                    {
-                                        p.selection = None;
+                                    if !p.selection.is_some_and(|sel| p.results.contains(&sel)) {
+                                        p.selection = p.results.first().copied();
                                     }
                                 }
                             };
@@ -761,10 +759,6 @@ impl App {
             ])
             .split(inner);
 
-        if p.selection.is_none() {
-            p.selection = p.results.first().copied();
-        }
-
         let res_chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -776,7 +770,12 @@ impl App {
 
         p.scroll = p
             .scroll
-            .content_length(p.results.len())
+            .content_length(
+                p.results
+                    .len()
+                    .saturating_sub(res_chunks[2].height as usize)
+                    .max(1),
+            )
             .viewport_content_length(res_chunks[2].height as usize);
         if let Some(sel) = &p.selection
             && let Some(pos) = p.results.iter().position(|a| a == sel)
@@ -796,7 +795,9 @@ impl App {
         );
 
         frame.render_stateful_widget(
-            Scrollbar::new(ScrollbarOrientation::VerticalLeft),
+            Scrollbar::new(ScrollbarOrientation::VerticalLeft)
+                .begin_symbol(None)
+                .end_symbol(None),
             res_chunks[0],
             &mut p.scroll,
         );
