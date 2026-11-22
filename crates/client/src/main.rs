@@ -1,25 +1,22 @@
 mod local_db;
 
 use anyhow::{Error, Result};
-use crossterm::{
-    cursor::position,
-    event::{Event, EventStream, KeyCode, KeyModifiers, MouseEventKind},
-};
+use crossterm::event::{Event, EventStream, KeyCode, KeyModifiers, MouseEventKind};
 use futures_util::{SinkExt, StreamExt};
 use ratatui::{
     Frame,
-    layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Style, Stylize},
     text::{Line, Span},
     widgets::{
         Block, Borders, Clear, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
     },
 };
-use ratatui_textarea::{Key, TextArea};
+use ratatui_textarea::TextArea;
 use relay_common::{ClientProtocol, Conversation, ServerProtocol, User};
 use relay_common::{Message, MessageCursor};
 use sqlx::SqlitePool;
-use std::{collections::HashMap, ops::Deref};
+use std::collections::HashMap;
 use strum::Display;
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite};
@@ -74,14 +71,6 @@ enum CommandMode {
     Command,
 }
 
-struct CommandPalette {
-    text: Box<TextArea<'static>>,
-    selection: Option<Command>,
-    results: Vec<Command>,
-    scroll: ScrollbarState,
-    mode: CommandMode,
-}
-
 enum Screens {
     Login {
         username: Box<TextArea<'static>>,
@@ -95,7 +84,6 @@ enum Screens {
         focus: FocusPoints,
         selected_conv: Option<Uuid>,
         scroll: ScrollbarState,
-        palette: Option<CommandPalette>,
     },
 }
 
@@ -113,11 +101,11 @@ impl Command {
     fn execute(&self, app: &mut App) -> Result<()> {
         match self {
             Command::NewConv => {
-                app.popup = Some(Popup {
+                app.popup = Some(Popup::Info(InfoPopup {
                     title: "New Conversation".to_string(),
                     message: "TBA".to_string(),
                     colour: Color::Green,
-                });
+                }));
                 Ok(())
             }
         }
@@ -152,10 +140,23 @@ enum ConnectionStatus {
     Connected,
 }
 
-struct Popup {
+struct InfoPopup {
     title: String,
     message: String,
     colour: Color,
+}
+
+struct PalettePopup {
+    text: Box<TextArea<'static>>,
+    selection: Option<Command>,
+    results: Vec<Command>,
+    scroll: ScrollbarState,
+    mode: CommandMode,
+}
+
+enum Popup {
+    Info(InfoPopup),
+    CommandPalette(PalettePopup),
 }
 
 struct App {
@@ -213,11 +214,11 @@ impl App {
                         Some(InboundMessage::Server(m)) => {
                             match self.handle_server_message(m).await {
                                 Ok(_) => {},
-                                Err(e) => self.popup = Some(Popup {
+                                Err(e) => self.popup = Some(Popup::Info( InfoPopup{
                                     title: "Server Error".to_string(),
                                     message: e.to_string(),
                                     colour: Color::LightRed
-                                }),
+                                })),
                             }
                         },
                         Some(InboundMessage::Connection(s)) => self.connection_status = s,
@@ -252,7 +253,6 @@ impl App {
                     selected_conv: None,
                     scroll: ScrollbarState::new(0),
                     focus: FocusPoints::Conversations,
-                    palette: None,
                 };
                 self.tx.send(ClientProtocol::GetConversations).await?;
             }
@@ -261,11 +261,11 @@ impl App {
                 reason,
                 timestamp: _,
             } => {
-                self.popup = Some(Popup {
+                self.popup = Some(Popup::Info(InfoPopup {
                     title: "Auth Failed".to_string(),
                     message: reason.to_string(),
                     colour: Color::Yellow,
-                });
+                }));
 
                 let mut username = Box::new(TextArea::default());
                 username.set_cursor_line_style(Style::default());
@@ -317,11 +317,11 @@ impl App {
                 //TODO: noti
             }
             ServerProtocol::Error { code, timestamp: _ } => {
-                self.popup = Some(Popup {
+                self.popup = Some(Popup::Info(InfoPopup {
                     title: "Server Error".to_string(),
                     message: code.to_string(),
                     colour: Color::LightRed,
-                })
+                }))
             }
             ServerProtocol::ConversationList {
                 conversations,
@@ -385,7 +385,7 @@ impl App {
             self.running = false;
             return Ok(());
         }
-        if self.popup.is_some()
+        if let Some(Popup::Info(_)) = self.popup
             && let Event::Key(k) = event
             && k.is_press()
             && ([KeyCode::Char(' '), KeyCode::Enter, KeyCode::Esc].contains(&k.code))
@@ -442,34 +442,33 @@ impl App {
                 selected_conv,
                 focus,
                 scroll,
-                palette,
             } => {
                 if let Event::Key(k) = event
                     && k.is_press()
                     && k.code == KeyCode::Char('k')
                     && k.modifiers.contains(KeyModifiers::CONTROL)
                 {
-                    if palette.is_some() {
-                        *palette = None;
-                    } else {
+                    if let Some(Popup::CommandPalette { .. }) = self.popup {
+                        self.popup = None;
+                    } else if self.popup.is_none() {
                         let mut t = Box::new(TextArea::default());
                         t.set_cursor_line_style(Style::default());
                         t.set_block(Block::default().borders(Borders::BOTTOM));
                         let all = Command::all();
-                        *palette = Some(CommandPalette {
+                        self.popup = Some(Popup::CommandPalette(PalettePopup {
                             text: t,
                             scroll: ScrollbarState::new(all.len()).viewport_content_length(10),
                             selection: all.first().copied(),
                             results: all,
                             mode: CommandMode::Command,
-                        })
+                        }));
                     }
-                } else if let Some(p) = palette {
+                } else if let Some(Popup::CommandPalette(p)) = &mut self.popup {
                     if let Event::Key(k) = event
                         && k.is_press()
                         && k.code == KeyCode::Esc
                     {
-                        *palette = None;
+                        self.popup = None;
                     } else {
                         if let Event::Key(k) = event
                             && k.is_press()
@@ -510,13 +509,12 @@ impl App {
                                 }
                                 KeyCode::Enter => {
                                     if let Some(sel) = p.selection {
-                                        *palette = None;
                                         sel.execute(self).unwrap_or_else(|err| {
-                                            self.popup = Some(Popup {
+                                            self.popup = Some(Popup::Info(InfoPopup {
                                                 title: "Error".to_string(),
                                                 message: err.to_string(),
                                                 colour: Color::Red,
-                                            })
+                                            }))
                                         });
                                     }
                                 } // Exec command
@@ -697,7 +695,14 @@ impl App {
         frame.render_widget(Paragraph::new(username).centered(), area);
     }
 
-    fn draw_popup(frame: &mut Frame, pop: &Popup) {
+    fn draw_popup(frame: &mut Frame, pop: &mut Popup) {
+        match pop {
+            Popup::Info(i) => Self::draw_info(frame, i),
+            Popup::CommandPalette(c) => Self::draw_palette(frame, c),
+        }
+    }
+
+    fn draw_info(frame: &mut Frame, pop: &InfoPopup) {
         let area = frame
             .area()
             .centered(Constraint::Percentage(50), Constraint::Length(7));
@@ -730,7 +735,7 @@ impl App {
         );
     }
 
-    fn draw_palette(frame: &mut Frame, p: &mut CommandPalette) {
+    fn draw_palette(frame: &mut Frame, p: &mut PalettePopup) {
         let area = frame
             .area()
             .centered(Constraint::Percentage(50), Constraint::Length(12));
@@ -833,7 +838,6 @@ impl App {
                 focus,
                 selected_conv,
                 scroll,
-                palette,
             } => {
                 let cols = Layout::horizontal(vec![
                     Constraint::Percentage(18),
@@ -863,9 +867,6 @@ impl App {
                 Self::draw_name(frame, l_rows[1], &user.username);
                 Self::draw_messages(frame, *focus == FocusPoints::Messages, rows[0]);
                 Self::draw_input(frame, rows[1], *focus == FocusPoints::Draft, draft);
-                if let Some(palette) = palette {
-                    Self::draw_palette(frame, palette)
-                }
             }
             Screens::Loading => {
                 frame.render_widget(
@@ -964,7 +965,7 @@ impl App {
                 );
             }
         }
-        if let Some(pop) = &self.popup {
+        if let Some(pop) = &mut self.popup {
             Self::draw_popup(frame, pop);
         }
     }
