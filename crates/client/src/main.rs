@@ -514,7 +514,7 @@ impl App {
                                                     .position(|a| *a == sel)
                                                     .unwrap_or(0)
                                                     .saturating_add(1)
-                                                    .min(p.results.len() - 1),
+                                                    .min(p.results.len().saturating_sub(1)),
                                             )
                                             .copied();
                                     } else {
@@ -783,9 +783,11 @@ impl App {
             }
         };
         p.scroll = p.scroll.position(
-            p.scroll
-                .get_position()
-                .min(p.results.len().saturating_sub((res_chunks[2].height) as usize)),
+            p.scroll.get_position().min(
+                p.results
+                    .len()
+                    .saturating_sub((res_chunks[2].height) as usize),
+            ),
         );
 
         frame.render_stateful_widget(
