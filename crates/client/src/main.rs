@@ -1,7 +1,10 @@
 mod local_db;
 
 use anyhow::{Error, Result};
-use crossterm::event::{Event, EventStream, KeyCode, KeyModifiers, MouseEventKind};
+use crossterm::{
+    cursor::position,
+    event::{Event, EventStream, KeyCode, KeyModifiers, MouseEventKind},
+};
 use futures_util::{SinkExt, StreamExt};
 use ratatui::{
     Frame,
@@ -17,6 +20,7 @@ use relay_common::{ClientProtocol, Conversation, ServerProtocol, User};
 use relay_common::{Message, MessageCursor};
 use sqlx::SqlitePool;
 use std::{collections::HashMap, ops::Deref};
+use strum::Display;
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite};
 use uuid::Uuid;
@@ -72,7 +76,9 @@ enum CommandMode {
 
 struct CommandPalette {
     text: Box<TextArea<'static>>,
-    selection: Option<usize>,
+    selection: Option<Command>,
+    results: Vec<Command>,
+    scroll: ScrollbarState,
     mode: CommandMode,
 }
 
@@ -92,6 +98,76 @@ enum Screens {
         palette: Option<CommandPalette>,
     },
 }
+
+#[derive(Debug, Clone, Copy, Display, PartialEq, Eq)]
+enum Command {
+    #[strum(to_string = "New Conversation")]
+    NewConv,
+    #[strum(to_string = "Test")]
+    Test,
+    #[strum(to_string = "Testing")]
+    Testing,
+    #[strum(to_string = "Testing This")]
+    Testhis,
+    #[strum(to_string = "Random abc123")]
+    Rand,
+    #[strum(to_string = "#*&n1ui")]
+    Uhhh,
+    #[strum(to_string = "one")]
+    One,
+    #[strum(to_string = "ONE")]
+    Onec,
+    #[strum(to_string = "two")]
+    Two,
+    #[strum(to_string = "three")]
+    Three,
+    #[strum(to_string = "four")]
+    Four,
+    #[strum(to_string = "five")]
+    Five,
+}
+
+impl Command {
+    fn all() -> Vec<Self> {
+        vec![
+            Self::NewConv,
+            Self::Test,
+            Self::Testing,
+            Self::Testhis,
+            Self::Rand,
+            Self::Uhhh,
+            Self::One,
+            Self::Onec,
+            Self::Two,
+            Self::Three,
+            Self::Four,
+            Self::Five,
+        ]
+    }
+
+    fn ranked(query: &str, thresh: f64) -> Vec<Self> {
+        let query = query.to_lowercase();
+        if query.trim().is_empty() {
+            return Self::all();
+        }
+        let mut all: Vec<_> = Self::all()
+            .into_iter()
+            .map(|f| {
+                let score = f.matches(query.trim());
+                (f, score)
+            })
+            .filter(|(_, score)| *score >= thresh)
+            .collect();
+        all.sort_by(|a, b| b.1.total_cmp(&a.1));
+        all.into_iter().map(|(com, _)| com).collect()
+    }
+
+    fn matches(&self, query: &str) -> f64 {
+        let score = strsim::jaro_winkler(&self.to_string().to_lowercase(), query);
+        if score.is_finite() { score } else { 0.0f64 }
+    }
+}
+
 enum ConnectionStatus {
     Disconnected,
     Connecting,
@@ -392,9 +468,12 @@ impl App {
                         let mut t = Box::new(TextArea::default());
                         t.set_cursor_line_style(Style::default());
                         t.set_block(Block::default().borders(Borders::BOTTOM));
+                        let all = Command::all();
                         *palette = Some(CommandPalette {
                             text: t,
+                            scroll: ScrollbarState::new(all.len()).viewport_content_length(10),
                             selection: None,
+                            results: all,
                             mode: CommandMode::Command,
                         })
                     }
@@ -407,10 +486,53 @@ impl App {
                     } else {
                         if let Event::Key(k) = event
                             && k.is_press()
-                            && (k.code == KeyCode::Enter || k.code == KeyCode::Tab)
                         {
-                        } else {
-                            p.text.input(event);
+                            match k.code {
+                                KeyCode::Up => {
+                                    if let Some(sel) = p.selection {
+                                        p.selection = p
+                                            .results
+                                            .get(
+                                                p.results
+                                                    .iter()
+                                                    .position(|a| *a == sel)
+                                                    .unwrap_or(0)
+                                                    .saturating_sub(1),
+                                            )
+                                            .copied();
+                                    } else {
+                                        p.selection = p.results.first().copied();
+                                    }
+                                }
+                                KeyCode::Down => {
+                                    if let Some(sel) = p.selection {
+                                        p.selection = p
+                                            .results
+                                            .get(
+                                                p.results
+                                                    .iter()
+                                                    .position(|a| *a == sel)
+                                                    .unwrap_or(0)
+                                                    .saturating_add(1)
+                                                    .min(p.results.len() - 1),
+                                            )
+                                            .copied();
+                                    } else {
+                                        p.selection = p.results.first().copied();
+                                    }
+                                }
+                                KeyCode::Enter => {} // Exec command
+                                KeyCode::Tab => {}   // nothing
+                                _ => {
+                                    p.text.input(event);
+                                    p.results = Command::ranked(&p.text.lines()[0], 0.65);
+                                    if let Some(sel) = &p.selection
+                                        && !p.results.contains(sel)
+                                    {
+                                        p.selection = None;
+                                    }
+                                }
+                            };
                         }
                     }
                 } else if let Event::Key(k) = event
@@ -522,7 +644,7 @@ impl App {
                                 {
                                     Color::LightCyan
                                 } else {
-                                    Color::default()
+                                    Color::Reset
                                 },
                             ),
                         )
@@ -612,10 +734,10 @@ impl App {
         );
     }
 
-    fn draw_palette(frame: &mut Frame, p: &CommandPalette) {
+    fn draw_palette(frame: &mut Frame, p: &mut CommandPalette) {
         let area = frame
             .area()
-            .centered(Constraint::Percentage(50), Constraint::Max(12));
+            .centered(Constraint::Percentage(50), Constraint::Length(12));
         frame.render_widget(Clear, area);
         let block = Block::default()
             .title(" Command Palette ")
@@ -633,8 +755,61 @@ impl App {
                 Constraint::Length(2),
             ])
             .split(inner);
+
+        if p.selection.is_none() {
+            p.selection = p.results.first().copied();
+        }
+
+        let res_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Fill(1),
+            ])
+            .split(chunks[1]);
+
+        p.scroll = p
+            .scroll
+            .content_length(p.results.len())
+            .viewport_content_length(res_chunks[2].height as usize);
+        if let Some(sel) = &p.selection
+            && let Some(pos) = p.results.iter().position(|a| a == sel)
+        {
+            if pos < p.scroll.get_position() {
+                p.scroll = p.scroll.position(pos);
+            } else if pos >= p.scroll.get_position() + (res_chunks[2].height as usize) {
+                p.scroll = p.scroll.position(pos - (res_chunks[2].height as usize) + 1);
+            }
+        };
+
+        frame.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalLeft),
+            res_chunks[0],
+            &mut p.scroll,
+        );
         frame.render_widget(&*p.text, chunks[0]);
-        frame.render_widget(Paragraph::new("TBD ig"), chunks[1]);
+
+        frame.render_widget(
+            Paragraph::new(
+                p.results
+                    .iter()
+                    .map(|comm| {
+                        Line::from(comm.to_string()).style(Style::default().bold().fg(
+                            if let Some(sel) = &p.selection
+                                && comm == sel
+                            {
+                                Color::LightCyan
+                            } else {
+                                Color::Reset
+                            },
+                        ))
+                    })
+                    .collect::<Vec<Line>>(),
+            )
+            .scroll((p.scroll.get_position() as u16, 0)),
+            res_chunks[2],
+        );
         frame.render_widget(
             Paragraph::new("%: Search | Enter: select | ↑/↓: navigate | Esc: close")
                 .style(Style::default().italic().gray())

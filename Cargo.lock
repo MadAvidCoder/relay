@@ -2433,6 +2433,8 @@ dependencies = [
  "ratatui-textarea",
  "relay-common",
  "sqlx",
+ "strsim",
+ "strum",
  "tokio 1.54.1",
  "tokio-tungstenite 0.30.0",
  "unicode-segmentation",
