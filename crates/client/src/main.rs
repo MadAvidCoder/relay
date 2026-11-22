@@ -335,7 +335,12 @@ impl App {
                 }
                 //TODO: noti
             }
-            ServerProtocol::Error { code, timestamp } => {} // Handle Error maybe show popover
+            ServerProtocol::Error { code, timestamp: _ } => {
+                self.popup = Some(Popup {
+                    title: "Server Error".to_string(),
+                    message: code.to_string(),
+                })
+            }
             ServerProtocol::ConversationList {
                 conversations,
                 timestamp: _,

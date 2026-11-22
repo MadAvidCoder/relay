@@ -167,9 +167,14 @@ pub enum AuthError {
 impl fmt::Display for AuthError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidCredentials => write!(f, "Invalid username or password. Please try again."),
+            Self::InvalidCredentials => {
+                write!(f, "Invalid username or password. Please try again.")
+            }
             Self::UserNotFound => write!(f, "Username not found. Please create an account."),
-            Self::AlreadyAuthenticated => write!(f, "This client has already been authenticated. Start a new session to log in again."),
+            Self::AlreadyAuthenticated => write!(
+                f,
+                "This client has already been authenticated. Start a new session to log in again."
+            ),
             Self::AlreadyConnected => write!(f, "Only one session per user is currently supported"),
             Self::Unauthorised => write!(f, "Unauthorised"),
             Self::UnknownError => write!(f, "An unknown error has occurred"),
@@ -186,6 +191,25 @@ pub enum ErrorCodes {
     ConversationNotFound,
     InternalError,
     UnknownError,
+}
+
+impl fmt::Display for ErrorCodes {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                ErrorCodes::NotAuthenticated => "User is not authenticated. Please log in.",
+                ErrorCodes::Unauthorised => "unauthorised request.",
+                ErrorCodes::InvalidRequest => "Invalid Request",
+                ErrorCodes::RecipientNotFound => "Recipient not found. Check the recipient ID",
+                ErrorCodes::ConversationNotFound =>
+                    "Conversation not found. Check the ID and try again.",
+                ErrorCodes::InternalError => "An internal error has occurred. Try again later.",
+                ErrorCodes::UnknownError => "An unknown error has occurred. Try again later.",
+            }
+        )
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
