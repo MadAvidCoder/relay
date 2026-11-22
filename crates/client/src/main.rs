@@ -116,6 +116,7 @@ impl Command {
                 app.popup = Some(Popup {
                     title: "New Conversation".to_string(),
                     message: "TBA".to_string(),
+                    colour: Color::Green,
                 });
                 Ok(())
             }
@@ -154,6 +155,7 @@ enum ConnectionStatus {
 struct Popup {
     title: String,
     message: String,
+    colour: Color,
 }
 
 struct App {
@@ -213,7 +215,8 @@ impl App {
                                 Ok(_) => {},
                                 Err(e) => self.popup = Some(Popup {
                                     title: "Server Error".to_string(),
-                                    message: e.to_string()
+                                    message: e.to_string(),
+                                    colour: Color::LightRed
                                 }),
                             }
                         },
@@ -261,6 +264,7 @@ impl App {
                 self.popup = Some(Popup {
                     title: "Auth Failed".to_string(),
                     message: reason.to_string(),
+                    colour: Color::Yellow,
                 });
 
                 let mut username = Box::new(TextArea::default());
@@ -316,6 +320,7 @@ impl App {
                 self.popup = Some(Popup {
                     title: "Server Error".to_string(),
                     message: code.to_string(),
+                    colour: Color::LightRed,
                 })
             }
             ServerProtocol::ConversationList {
@@ -510,6 +515,7 @@ impl App {
                                             self.popup = Some(Popup {
                                                 title: "Error".to_string(),
                                                 message: err.to_string(),
+                                                colour: Color::Red,
                                             })
                                         });
                                     }
@@ -700,7 +706,7 @@ impl App {
         let block = Block::default()
             .title(format!(" {} ", pop.title))
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Yellow))
+            .border_style(Style::default().fg(pop.colour))
             .style(Style::default().bg(Color::Black));
         let inner = block.inner(area);
 
