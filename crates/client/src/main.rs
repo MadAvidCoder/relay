@@ -6,7 +6,7 @@ use futures_util::{SinkExt, StreamExt};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Style, Stylize},
+    style::{Color, Modifier, Style, Stylize},
     text::{Line, Span},
     widgets::{
         Block, Borders, Clear, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
@@ -122,6 +122,7 @@ impl Command {
                         ]))
                         .border_style(Style::new().yellow()),
                 );
+                name.set_cursor_style(Style::default().slow_blink().reversed());
                 let mut search = Box::new(TextArea::default());
                 search.set_cursor_line_style(Style::default());
                 search.set_block(Block::default().borders(Borders::BOTTOM).title_bottom(
@@ -130,6 +131,7 @@ impl Command {
                         "(Enter to add) ".italic().dim(),
                     ]),
                 ));
+                search.set_cursor_style(Style::default());
                 app.popup = Some(Popup::NewGroup(NewGroupPopup {
                     name,
                     search,
@@ -627,16 +629,25 @@ impl App {
                                     }
                                 }
                                 KeyCode::Enter => {
-                                    if g.focus == NewGroupFocus::Name {
-                                        g.focus = NewGroupFocus::Search;
-                                    } else {
-                                        // TBA create
-                                    }
+
+                                    // TBA create
                                 }
                                 KeyCode::Tab | KeyCode::BackTab => {
                                     g.focus = match g.focus {
-                                        NewGroupFocus::Name => NewGroupFocus::Search,
-                                        NewGroupFocus::Search => NewGroupFocus::Name,
+                                        NewGroupFocus::Name => {
+                                            g.search.set_cursor_style(
+                                                Style::default().slow_blink().reversed(),
+                                            );
+                                            g.name.set_cursor_style(Style::default());
+                                            NewGroupFocus::Search
+                                        }
+                                        NewGroupFocus::Search => {
+                                            g.search.set_cursor_style(Style::default());
+                                            g.name.set_cursor_style(
+                                                Style::default().slow_blink().reversed(),
+                                            );
+                                            NewGroupFocus::Name
+                                        }
                                     }
                                 }
                                 KeyCode::Char(' ') => {
