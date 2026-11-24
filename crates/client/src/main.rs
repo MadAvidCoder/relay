@@ -774,8 +774,19 @@ impl App {
                             *active_conv = *selected_conv;
                         }
                         FocusPoints::Draft => {
-                            if k.modifiers.contains(KeyModifiers::CONTROL) {
-                                // TODO: Send
+                            if k.modifiers.contains(KeyModifiers::CONTROL)
+                                && let Some(conversation_id) = *active_conv
+                                && let message = draft.lines().join("\n")
+                                && !message.is_empty()
+                            {
+                                self.tx
+                                    .send(ClientProtocol::SendMessage {
+                                        message,
+                                        conversation_id,
+                                    })
+                                    .await?;
+                                draft.select_all();
+                                draft.cut();
                             } else {
                                 draft.input(event);
                             }
@@ -973,9 +984,37 @@ impl App {
         );
     }
 
-    fn draw_messages(frame: &mut Frame, focused: bool, area: Rect) {
+    fn draw_messages(
+        frame: &mut Frame,
+        messages: &[Message],
+        focused: bool,
+        contacts: &[User],
+        area: Rect,
+    ) {
         frame.render_widget(
-            Paragraph::new("Hello World").block(
+            Paragraph::new(
+                messages
+                    .iter()
+                    .flat_map(|f| {
+                        let sender = contacts
+                            .iter()
+                            .find(|x| x.id == f.id)
+                            .map(|f| {
+                                if f.display_name.trim().is_empty() {
+                                    f.username.clone()
+                                } else {
+                                    f.display_name.clone()
+                                }
+                            })
+                            .unwrap_or("Unknown".to_string());
+                        [
+                            Line::from(f.content.clone()).left_aligned(),
+                            Line::from(sender.clone()).italic().dim().right_aligned(),
+                        ]
+                    })
+                    .collect::<Vec<Line>>(),
+            )
+            .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_style(if focused {
@@ -1339,7 +1378,18 @@ impl App {
                     conv_height,
                 );
                 Self::draw_name(frame, l_rows[1], &user.username);
-                Self::draw_messages(frame, *focus == FocusPoints::Messages, rows[0]);
+                let x = Vec::new();
+                Self::draw_messages(
+                    frame,
+                    if let Some(act) = active_conv {
+                        self.messages.get(act).unwrap_or(&x)
+                    } else {
+                        &x
+                    },
+                    *focus == FocusPoints::Messages,
+                    &self.contacts,
+                    rows[0],
+                );
                 Self::draw_input(frame, rows[1], *focus == FocusPoints::Draft, draft);
             }
             Screens::Loading => {
