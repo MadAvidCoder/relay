@@ -657,17 +657,13 @@ impl App {
                                 KeyCode::Enter => {
                                     if k.modifiers.contains(KeyModifiers::CONTROL) {
                                         // TODO: Add conv
-                                    } else if g.focus == NewGroupFocus::Name {
-                                        g.focus = NewGroupFocus::Search
-                                    } else {
-                                        if let Some(sel) = g.selection {
-                                            if let Some(ind) =
-                                                g.added.iter().position(|x| *x == sel)
-                                            {
-                                                g.added.remove(ind);
-                                            } else {
-                                                g.added.push(sel);
-                                            }
+                                    } else if g.focus == NewGroupFocus::Search
+                                        && let Some(sel) = g.selection
+                                    {
+                                        if let Some(ind) = g.added.iter().position(|x| *x == sel) {
+                                            g.added.remove(ind);
+                                        } else {
+                                            g.added.push(sel);
                                         }
                                     }
                                 }
