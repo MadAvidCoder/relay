@@ -117,18 +117,19 @@ impl Command {
                     Block::default()
                         .borders(Borders::BOTTOM)
                         .title_bottom(Line::from(vec![
-                            "Group Name".into(),
-                            " (optional)".italic().dim(),
+                            "⎯⎯ Group Name".into(),
+                            " (optional) ".italic().dim(),
                         ]))
                         .border_style(Style::new().yellow()),
                 );
                 let mut search = Box::new(TextArea::default());
                 search.set_cursor_line_style(Style::default());
-                search.set_block(
-                    Block::default()
-                        .borders(Borders::BOTTOM)
-                        .title_bottom("Add Users"),
-                );
+                search.set_block(Block::default().borders(Borders::BOTTOM).title_bottom(
+                    Line::from(vec![
+                        "── Search Users ".into(),
+                        "(Enter to add) ".italic().dim(),
+                    ]),
+                ));
                 app.popup = Some(Popup::NewGroup(NewGroupPopup {
                     name,
                     search,
@@ -605,20 +606,24 @@ impl App {
                                     }
                                 }
                                 KeyCode::Down => {
-                                    if let Some(sel) = g.selection {
-                                        g.selection = g
-                                            .results
-                                            .get(
-                                                g.results
-                                                    .iter()
-                                                    .position(|a| a.id == sel)
-                                                    .unwrap_or(0)
-                                                    .saturating_add(1)
-                                                    .min(g.results.len().saturating_sub(1)),
-                                            )
-                                            .map(|found| found.id);
-                                    } else {
-                                        g.selection = g.results.first().map(|found| found.id);
+                                    if g.focus == NewGroupFocus::Search {
+                                        if let Some(sel) = g.selection {
+                                            g.selection = g
+                                                .results
+                                                .get(
+                                                    g.results
+                                                        .iter()
+                                                        .position(|a| a.id == sel)
+                                                        .unwrap_or(0)
+                                                        .saturating_add(1)
+                                                        .min(g.results.len().saturating_sub(1)),
+                                                )
+                                                .map(|found| found.id);
+                                        } else {
+                                            g.selection = g.results.first().map(|found| found.id);
+                                        }
+                                    } else if g.focus == NewGroupFocus::Name {
+                                        g.focus = NewGroupFocus::Search;
                                     }
                                 }
                                 KeyCode::Enter => {
@@ -628,7 +633,7 @@ impl App {
                                         // TBA create
                                     }
                                 }
-                                KeyCode::Tab => {
+                                KeyCode::Tab | KeyCode::BackTab => {
                                     g.focus = match g.focus {
                                         NewGroupFocus::Name => NewGroupFocus::Search,
                                         NewGroupFocus::Search => NewGroupFocus::Name,
@@ -901,7 +906,7 @@ impl App {
                     Block::default()
                         .borders(Borders::BOTTOM)
                         .title_bottom(Line::from(vec![
-                            "  Group Name".italic(),
+                            "⎯⎯ Group Name".into(),
                             " (optional) ".italic().dim(),
                         ])),
                 )
@@ -918,7 +923,10 @@ impl App {
                 .unwrap_or(
                     Block::default()
                         .borders(Borders::BOTTOM)
-                        .title_bottom("  Add Users ".italic()),
+                        .title_bottom(Line::from(vec![
+                            "   Search Users ".into(),
+                            "(Enter to add)".italic().dim(),
+                        ])),
                 )
                 .border_style(if g.focus == NewGroupFocus::Search {
                     Style::new().cyan()
@@ -956,7 +964,7 @@ impl App {
             res_chunks[2],
         );
         frame.render_widget(
-            Paragraph::new("Tab: next field | Space: add user | ↑/↓: navigate | Esc: cancel")
+            Paragraph::new("Tab: switch field | Ctrl+Enter: confirm |  Esc: cancel")
                 .style(Style::default().italic().gray().dim())
                 .block(Block::default().borders(Borders::TOP))
                 .centered(),
