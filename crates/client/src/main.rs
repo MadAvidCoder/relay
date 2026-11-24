@@ -125,12 +125,21 @@ impl Command {
                 name.set_cursor_style(Style::default().slow_blink().reversed());
                 let mut search = Box::new(TextArea::default());
                 search.set_cursor_line_style(Style::default());
-                search.set_block(Block::default().borders(Borders::BOTTOM).title_bottom(
-                    Line::from(vec![
-                        "── Search Users ".into(),
-                        "(Enter to add) ".italic().dim(),
-                    ]),
-                ));
+                search.set_block(
+                    Block::default()
+                        .borders(Borders::BOTTOM)
+                        .title_bottom(Line::from(vec![
+                            "── Search Users ".into(),
+                            "(Enter to add) ".italic().dim(),
+                        ]))
+                        .title_bottom(
+                            Line::from(vec![
+                                Span::from(" 0 selected "),
+                                Span::from("─"),
+                            ])
+                            .right_aligned(),
+                        ),
+                );
                 search.set_cursor_style(Style::default());
                 let all: Vec<Uuid> = app.contacts.iter().map(|a| a.id).collect();
                 app.popup = Some(Popup::NewGroup(NewGroupPopup {
@@ -960,7 +969,7 @@ impl App {
                     Block::default()
                         .borders(Borders::BOTTOM)
                         .title_bottom(Line::from(vec![
-                            "⎯⎯ Group Name".into(),
+                            "── Group Name".into(),
                             " (optional) ".italic().dim(),
                         ])),
                 )
@@ -971,16 +980,18 @@ impl App {
                 }),
         );
         g.search.set_block(
-            g.search
-                .block()
-                .cloned()
-                .unwrap_or(
-                    Block::default()
-                        .borders(Borders::BOTTOM)
-                        .title_bottom(Line::from(vec![
-                            "   Search Users ".into(),
-                            "(Enter to add)".italic().dim(),
-                        ])),
+            Block::default()
+                .borders(Borders::BOTTOM)
+                .title_bottom(Line::from(vec![
+                    "── Search Users ".into(),
+                    "(Enter to add) ".italic().dim(),
+                ]))
+                .title_bottom(
+                    Line::from(vec![
+                        Span::from(format!(" {} selected ", g.added.len())),
+                        Span::from("─"),
+                    ])
+                    .right_aligned(),
                 )
                 .border_style(if g.focus == NewGroupFocus::Search {
                     Style::new().cyan()
