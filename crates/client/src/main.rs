@@ -661,7 +661,13 @@ impl App {
                                         g.focus = NewGroupFocus::Search
                                     } else {
                                         if let Some(sel) = g.selection {
-                                            g.added.push(sel);
+                                            if let Some(ind) =
+                                                g.added.iter().position(|x| *x == sel)
+                                            {
+                                                g.added.remove(ind);
+                                            } else {
+                                                g.added.push(sel);
+                                            }
                                         }
                                     }
                                 }
@@ -997,27 +1003,31 @@ impl App {
                             Line::from(if !user.display_name.trim().is_empty() {
                                 vec![
                                     Span::from(user.display_name.clone()),
-                                    Span::from(" | "),
+                                    Span::from(" "),
                                     Span::from(format!("@{} ", user.username.clone()))
                                         .dim()
                                         .italic(),
                                 ]
                             } else {
-                                vec![
-                                    Span::from(format!("@{} ", user.username.clone()))
-                                        .dim()
-                                        .italic(),
-                                ]
+                                vec![Span::from(format!("@{} ", user.username.clone())).italic()]
                             })
-                            .style(
+                            .style(if g.added.contains(uid) {
                                 if let Some(sel) = g.selection
                                     && user.id == sel
+                                    && g.focus == NewGroupFocus::Search
                                 {
-                                    Style::new().bold().fg(Color::Cyan)
+                                    Style::new().fg(Color::Green).bold()
                                 } else {
-                                    Style::new()
-                                },
-                            ),
+                                    Style::new().fg(Color::Green)
+                                }
+                            } else if let Some(sel) = g.selection
+                                && user.id == sel
+                                && g.focus == NewGroupFocus::Search
+                            {
+                                Style::new().bold().fg(Color::Cyan)
+                            } else {
+                                Style::new()
+                            }),
                         )
                     })
                     .collect::<Vec<Line>>(),
