@@ -89,22 +89,54 @@ enum Screens {
 
 #[derive(Debug, Clone, Copy, Display, PartialEq, Eq)]
 enum Command {
-    #[strum(to_string = "New Conversation")]
-    NewConv,
+    #[strum(to_string = "New DM")]
+    NewDM,
+    #[strum(to_string = "New Group")]
+    NewGroup,
 }
 
 impl Command {
     fn all() -> Vec<Self> {
-        vec![Self::NewConv]
+        vec![Self::NewDM, Self::NewGroup]
     }
 
     fn execute(&self, app: &mut App) -> Result<()> {
         match self {
-            Command::NewConv => {
+            Command::NewDM => {
                 app.popup = Some(Popup::Info(InfoPopup {
-                    title: "New Conversation".to_string(),
+                    title: "New DM".to_string(),
                     message: "TBA".to_string(),
                     colour: Color::Green,
+                }));
+                Ok(())
+            }
+            Command::NewGroup => {
+                let mut name = Box::new(TextArea::default());
+                name.set_cursor_line_style(Style::default());
+                name.set_block(
+                    Block::default()
+                        .borders(Borders::BOTTOM)
+                        .title_bottom(Line::from(vec![
+                            "Group Name".into(),
+                            " (optional)".italic().dim(),
+                        ]))
+                        .border_style(Style::new().yellow()),
+                );
+                let mut search = Box::new(TextArea::default());
+                search.set_cursor_line_style(Style::default());
+                search.set_block(
+                    Block::default()
+                        .borders(Borders::BOTTOM)
+                        .title_bottom("Add Users"),
+                );
+                app.popup = Some(Popup::NewGroup(NewGroupPopup {
+                    name,
+                    search,
+                    results: Vec::new(),
+                    added: Vec::new(),
+                    focus: NewGroupFocus::Name,
+                    selection: None,
+                    scroll: ScrollbarState::new(0).viewport_content_length(10),
                 }));
                 Ok(())
             }
@@ -154,10 +186,28 @@ struct PalettePopup {
     mode: CommandMode,
 }
 
+#[derive(Debug, PartialEq)]
+enum NewGroupFocus {
+    Name,
+    Search,
+}
+
+struct NewGroupPopup {
+    name: Box<TextArea<'static>>,
+    search: Box<TextArea<'static>>,
+    results: Vec<User>,
+    added: Vec<Uuid>,
+    focus: NewGroupFocus,
+    selection: Option<Uuid>,
+    scroll: ScrollbarState,
+}
 enum Popup {
     Info(InfoPopup),
     CommandPalette(PalettePopup),
+    NewGroup(NewGroupPopup),
 }
+
+const POPUP_SIZE: (Constraint, Constraint) = (Constraint::Percentage(50), Constraint::Length(12));
 
 struct App {
     running: bool,
@@ -400,31 +450,29 @@ impl App {
                 password,
                 active,
             } => {
-                let mut used: bool = false;
                 if let Event::Key(key) = event
                     && key.is_press()
-                {
-                    match key.code {
+                    && match key.code {
                         KeyCode::Enter => {
-                            used = true;
                             self.tx
                                 .send(ClientProtocol::Auth {
                                     username: username.lines().join(""),
                                 })
                                 .await?;
                             change_screen = Some(Screens::Loading);
+                            true
                         }
                         KeyCode::Tab | KeyCode::BackTab => {
                             *active = match active {
                                 LoginFields::Password => LoginFields::Username,
                                 LoginFields::Username => LoginFields::Password,
                             };
-                            used = true;
+                            true
                         }
-                        _ => {}
+                        _ => false,
                     }
-                }
-                if !used {
+                {
+                } else {
                     match active {
                         LoginFields::Username => {
                             username.input(event);
@@ -448,9 +496,9 @@ impl App {
                     && k.code == KeyCode::Char('k')
                     && k.modifiers.contains(KeyModifiers::CONTROL)
                 {
-                    if let Some(Popup::CommandPalette { .. }) = self.popup {
+                    if let Some(Popup::CommandPalette(..)) = self.popup {
                         self.popup = None;
-                    } else if self.popup.is_none() {
+                    } else {
                         let mut t = Box::new(TextArea::default());
                         t.set_cursor_line_style(Style::default());
                         t.set_block(Block::default().borders(Borders::BOTTOM));
@@ -526,6 +574,84 @@ impl App {
                                         p.selection = p.results.first().copied();
                                     }
                                 }
+                            };
+                        }
+                    }
+                } else if let Some(Popup::NewGroup(g)) = &mut self.popup {
+                    if let Event::Key(k) = event
+                        && k.is_press()
+                        && k.code == KeyCode::Esc
+                    {
+                        self.popup = None;
+                    } else {
+                        if let Event::Key(k) = event
+                            && k.is_press()
+                        {
+                            match k.code {
+                                KeyCode::Up => {
+                                    if let Some(sel) = g.selection {
+                                        g.selection = g
+                                            .results
+                                            .get(
+                                                g.results
+                                                    .iter()
+                                                    .position(|a| a.id == sel)
+                                                    .unwrap_or(0)
+                                                    .saturating_sub(1),
+                                            )
+                                            .map(|found| found.id);
+                                    } else {
+                                        g.selection = g.results.first().map(|found| found.id);
+                                    }
+                                }
+                                KeyCode::Down => {
+                                    if let Some(sel) = g.selection {
+                                        g.selection = g
+                                            .results
+                                            .get(
+                                                g.results
+                                                    .iter()
+                                                    .position(|a| a.id == sel)
+                                                    .unwrap_or(0)
+                                                    .saturating_add(1)
+                                                    .min(g.results.len().saturating_sub(1)),
+                                            )
+                                            .map(|found| found.id);
+                                    } else {
+                                        g.selection = g.results.first().map(|found| found.id);
+                                    }
+                                }
+                                KeyCode::Enter => {
+                                    if g.focus == NewGroupFocus::Name {
+                                        g.focus = NewGroupFocus::Search;
+                                    } else {
+                                        // TBA create
+                                    }
+                                }
+                                KeyCode::Tab => {
+                                    g.focus = match g.focus {
+                                        NewGroupFocus::Name => NewGroupFocus::Search,
+                                        NewGroupFocus::Search => NewGroupFocus::Name,
+                                    }
+                                }
+                                KeyCode::Char(' ') => {
+                                    if g.focus == NewGroupFocus::Name {
+                                        g.name.input(event);
+                                    } else {
+                                        if let Some(sel) = g.selection {
+                                            g.added.push(sel);
+                                        }
+                                    }
+                                }
+                                _ => match g.focus {
+                                    NewGroupFocus::Name => {
+                                        g.name.input(event);
+                                    }
+                                    NewGroupFocus::Search => {
+                                        g.search.input(event);
+                                        // TODO: add searching
+                                    }
+                                },
                             };
                         }
                     }
@@ -636,7 +762,7 @@ impl App {
                                 if let Some(sel) = sel
                                     && &conv.id == sel
                                 {
-                                    Color::LightCyan
+                                    Color::Cyan
                                 } else {
                                     Color::Reset
                                 },
@@ -699,13 +825,147 @@ impl App {
         match pop {
             Popup::Info(i) => Self::draw_info(frame, i),
             Popup::CommandPalette(c) => Self::draw_palette(frame, c),
+            Popup::NewGroup(g) => Self::draw_new_group(frame, g),
         }
     }
 
+    fn draw_new_group(frame: &mut Frame, g: &mut NewGroupPopup) {
+        let area = frame.area().centered(POPUP_SIZE.0, POPUP_SIZE.1);
+        frame.render_widget(Clear, area);
+        let block = Block::default()
+            .title(" New Group ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Yellow))
+            .style(Style::default().bg(Color::Black));
+        frame.render_widget(&block, area);
+
+        let inner = block.inner(area);
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(2),
+                Constraint::Length(2),
+                Constraint::Fill(1),
+                Constraint::Length(2),
+            ])
+            .split(inner);
+
+        let res_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Fill(1),
+            ])
+            .split(chunks[2]);
+
+        g.scroll = g
+            .scroll
+            .content_length(
+                g.results
+                    .len()
+                    .saturating_sub(res_chunks[2].height as usize)
+                    .max(1),
+            )
+            .viewport_content_length(res_chunks[2].height as usize);
+        if let Some(sel) = g.selection
+            && let Some(pos) = g.results.iter().position(|a| a.id == sel)
+        {
+            if pos < g.scroll.get_position() {
+                g.scroll = g.scroll.position(pos);
+            } else if pos >= g.scroll.get_position() + (res_chunks[2].height as usize) {
+                g.scroll = g.scroll.position(pos - (res_chunks[2].height as usize) + 1);
+            }
+        };
+        g.scroll = g.scroll.position(
+            g.scroll.get_position().min(
+                g.results
+                    .len()
+                    .saturating_sub((res_chunks[2].height) as usize),
+            ),
+        );
+
+        frame.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalLeft)
+                .begin_symbol(None)
+                .end_symbol(None),
+            res_chunks[0],
+            &mut g.scroll,
+        );
+
+        g.name.set_block(
+            g.name
+                .block()
+                .cloned()
+                .unwrap_or(
+                    Block::default()
+                        .borders(Borders::BOTTOM)
+                        .title_bottom(Line::from(vec![
+                            "  Group Name".italic(),
+                            " (optional) ".italic().dim(),
+                        ])),
+                )
+                .border_style(if g.focus == NewGroupFocus::Name {
+                    Style::new().cyan()
+                } else {
+                    Style::new().dark_gray()
+                }),
+        );
+        g.search.set_block(
+            g.search
+                .block()
+                .cloned()
+                .unwrap_or(
+                    Block::default()
+                        .borders(Borders::BOTTOM)
+                        .title_bottom("  Add Users ".italic()),
+                )
+                .border_style(if g.focus == NewGroupFocus::Search {
+                    Style::new().cyan()
+                } else {
+                    Style::new().dark_gray()
+                }),
+        );
+
+        frame.render_widget(&*g.name, chunks[0]);
+        frame.render_widget(&*g.search, chunks[1]);
+
+        frame.render_widget(
+            Paragraph::new(
+                g.results
+                    .iter()
+                    .map(|user| {
+                        Line::from(vec![
+                            Span::from(user.display_name.clone()),
+                            Span::from(" | "),
+                            Span::from(user.username.clone()).dim().italic(),
+                        ])
+                        .style(
+                            if let Some(sel) = g.selection
+                                && user.id == sel
+                            {
+                                Style::new().bold().fg(Color::Cyan)
+                            } else {
+                                Style::new()
+                            },
+                        )
+                    })
+                    .collect::<Vec<Line>>(),
+            )
+            .scroll((g.scroll.get_position() as u16, 0)),
+            res_chunks[2],
+        );
+        frame.render_widget(
+            Paragraph::new("Tab: next field | Space: add user | ↑/↓: navigate | Esc: cancel")
+                .style(Style::default().italic().gray().dim())
+                .block(Block::default().borders(Borders::TOP))
+                .centered(),
+            chunks[3],
+        );
+    }
+
     fn draw_info(frame: &mut Frame, pop: &InfoPopup) {
-        let area = frame
-            .area()
-            .centered(Constraint::Percentage(50), Constraint::Length(7));
+        let area = frame.area().centered(POPUP_SIZE.0, POPUP_SIZE.1);
         frame.render_widget(Clear, area);
 
         let block = Block::default()
@@ -736,9 +996,7 @@ impl App {
     }
 
     fn draw_palette(frame: &mut Frame, p: &mut PalettePopup) {
-        let area = frame
-            .area()
-            .centered(Constraint::Percentage(50), Constraint::Length(12));
+        let area = frame.area().centered(POPUP_SIZE.0, POPUP_SIZE.1);
         frame.render_widget(Clear, area);
         let block = Block::default()
             .title(" Command Palette ")
@@ -810,7 +1068,7 @@ impl App {
                             if let Some(sel) = &p.selection
                                 && comm == sel
                             {
-                                Color::LightCyan
+                                Color::Cyan
                             } else {
                                 Color::Reset
                             },
