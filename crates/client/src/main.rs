@@ -16,7 +16,10 @@ use ratatui_textarea::TextArea;
 use relay_common::{ClientProtocol, Conversation, ServerProtocol, User};
 use relay_common::{Message, MessageCursor};
 use sqlx::SqlitePool;
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    io::{self, Write},
+};
 use strum::Display;
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite};
@@ -84,6 +87,7 @@ enum Screens {
         focus: FocusPoints,
         selected_conv: Option<Uuid>,
         scroll: ScrollbarState,
+        conv_height: usize,
     },
 }
 
@@ -315,9 +319,10 @@ impl App {
                 self.screen = Screens::Main {
                     draft: t,
                     user,
-                    selected_conv: None,
+                    selected_conv: self.conversations.first().map(|a| a.id),
                     scroll: ScrollbarState::new(0),
                     focus: FocusPoints::Conversations,
+                    conv_height: 16,
                 };
                 self.tx.send(ClientProtocol::GetConversations).await?;
             }
@@ -428,6 +433,11 @@ impl App {
                                 }),
                         })
                         .await?;
+                }
+                if let Screens::Main { selected_conv, .. } = &mut self.screen
+                    && selected_conv.is_none()
+                {
+                    *selected_conv = self.conversations.first().map(|c| c.id);
                 }
             }
             ServerProtocol::MessageHistory {
@@ -542,6 +552,7 @@ impl App {
                 selected_conv,
                 focus,
                 scroll,
+                conv_height,
             } => {
                 if let Event::Key(k) = event
                     && k.is_press()
@@ -760,17 +771,21 @@ impl App {
                         draft.set_cursor_style(Style::default());
                     }
                 } else if let Event::Mouse(e) = event {
-                    match e.kind {
-                        MouseEventKind::ScrollUp => {
-                            scroll.prev();
-                            scroll.prev();
-                            scroll.prev();
-                        }
-                        MouseEventKind::ScrollDown => {
-                            scroll.next();
-                            scroll.next();
-                            scroll.next();
-                        }
+                    match focus {
+                        FocusPoints::Conversations => match e.kind {
+                            MouseEventKind::ScrollUp => {
+                                scroll.prev();
+                                scroll.prev();
+                                scroll.prev();
+                            }
+                            MouseEventKind::ScrollDown => {
+                                scroll.next();
+                                scroll.next();
+                                scroll.next();
+                            }
+                            _ => {}
+                        },
+                        FocusPoints::Messages => {}
                         _ => {}
                     }
                 } else if let Event::Key(k) = event
@@ -794,7 +809,19 @@ impl App {
                                 .unwrap_or(self.conversations.last().unwrap())
                                 .id,
                         )
+                    } else {
+                        *selected_conv = self.conversations.first().map(|c| c.id);
                     }
+
+                    if let Some(sel) = selected_conv
+                        && let Some(pos) = self.conversations.iter().position(|a| a.id == *sel)
+                    {
+                        if pos < scroll.get_position() {
+                            *scroll = scroll.position(pos);
+                        } else if pos >= scroll.get_position() + *conv_height {
+                            *scroll = scroll.position(pos - *conv_height + 1);
+                        }
+                    };
                 } else if let Event::Key(k) = event
                     && k.is_press()
                     && *focus == FocusPoints::Conversations
@@ -815,7 +842,19 @@ impl App {
                                 .unwrap_or(self.conversations.first().unwrap())
                                 .id,
                         )
+                    } else {
+                        *selected_conv = self.conversations.first().map(|c| c.id);
                     }
+
+                    if let Some(sel) = selected_conv
+                        && let Some(pos) = self.conversations.iter().position(|a| a.id == *sel)
+                    {
+                        if pos < scroll.get_position() {
+                            *scroll = scroll.position(pos);
+                        } else if pos >= scroll.get_position() + *conv_height {
+                            *scroll = scroll.position(pos - *conv_height + 1);
+                        }
+                    };
                 } else if self.input_mode == InputModes::Drafting && *focus == FocusPoints::Draft {
                     draft.input(event);
                 }
@@ -834,6 +873,7 @@ impl App {
         conversations: &[Conversation],
         sel: &Option<Uuid>,
         bar: &mut ScrollbarState,
+        conv_height: &mut usize,
     ) {
         let [scrollbar_area, _, content_area] = Layout::horizontal([
             Constraint::Length(1),
@@ -841,6 +881,18 @@ impl App {
             Constraint::Min(0),
         ])
         .areas(area);
+
+        let content_height = content_area.height.saturating_sub(2) as usize;
+        *conv_height = content_height;
+
+        *bar = bar.position(
+            bar.get_position()
+                .min(conversations.len().saturating_sub(content_height)),
+        );
+
+        *bar = bar
+            .viewport_content_length(content_height)
+            .content_length(conversations.len().saturating_sub(content_height).max(1));
         frame.render_stateful_widget(
             Scrollbar::new(ScrollbarOrientation::VerticalLeft),
             scrollbar_area,
@@ -1215,6 +1267,7 @@ impl App {
                 focus,
                 selected_conv,
                 scroll,
+                conv_height,
             } => {
                 let cols = Layout::horizontal(vec![
                     Constraint::Percentage(18),
@@ -1240,6 +1293,7 @@ impl App {
                     self.conversations.as_ref(),
                     selected_conv,
                     scroll,
+                    conv_height,
                 );
                 Self::draw_name(frame, l_rows[1], &user.username);
                 Self::draw_messages(frame, *focus == FocusPoints::Messages, rows[0]);
