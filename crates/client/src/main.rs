@@ -133,11 +133,8 @@ impl Command {
                             "(Enter to add) ".italic().dim(),
                         ]))
                         .title_bottom(
-                            Line::from(vec![
-                                Span::from(" 0 selected "),
-                                Span::from("─"),
-                            ])
-                            .right_aligned(),
+                            Line::from(vec![Span::from(" 0 selected "), Span::from("─")])
+                                .right_aligned(),
                         ),
                 );
                 search.set_cursor_style(Style::default());
