@@ -918,6 +918,9 @@ impl App {
                 Constraint::Fill(1),
             ])
             .split(chunks[2]);
+        if g.selection.is_none_or(|sel| !g.results.contains(&sel)) {
+            g.selection = g.results.first().copied();
+        }
 
         g.scroll = g
             .scroll
