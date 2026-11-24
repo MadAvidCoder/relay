@@ -6,13 +6,13 @@ use futures_util::{SinkExt, StreamExt};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style, Stylize},
+    style::{Color, Style, Stylize},
     text::{Line, Span},
     widgets::{
         Block, Borders, Clear, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
     },
 };
-use ratatui_textarea::{Key, TextArea};
+use ratatui_textarea::TextArea;
 use relay_common::{ClientProtocol, Conversation, ServerProtocol, User};
 use relay_common::{Message, MessageCursor};
 use sqlx::SqlitePool;
@@ -284,7 +284,9 @@ impl App {
                             }
                         },
                         Some(InboundMessage::Connection(s)) => self.connection_status = s,
-                        None => self.running = false,
+                        None => {
+                            self.running = false;
+                        },
                     }
                 }
                 Some(Ok(event)) = events.next() => {
@@ -344,9 +346,23 @@ impl App {
                 }
             }
             ServerProtocol::ConversationCreated {
-                conversation_id,
-                timestamp,
-            } => {} //TBA
+                conversation,
+                timestamp: _,
+            } => {
+                local_db::save_conversation(&conversation, &self.db).await?;
+                self.messages.insert(
+                    conversation.id,
+                    if let Some(msg) = &conversation.latest_message {
+                        vec![msg.clone()]
+                    } else {
+                        Vec::new()
+                    },
+                );
+                if let Screens::Main { selected_conv, .. } = &mut self.screen {
+                    *selected_conv = Some(conversation.id);
+                }
+                self.conversations.push(conversation);
+            }
             ServerProtocol::NewMessage {
                 message_id,
                 sender_id,
@@ -522,7 +538,7 @@ impl App {
             Screens::Loading => {}
             Screens::Main {
                 draft,
-                user: _,
+                user,
                 selected_conv,
                 focus,
                 scroll,
@@ -662,7 +678,23 @@ impl App {
                                 }
                                 KeyCode::Enter => {
                                     if k.modifiers.contains(KeyModifiers::CONTROL) {
-                                        // TODO: Add conv
+                                        if !g.added.is_empty() {
+                                            if !g.added.contains(&user.id) {
+                                                g.added.push(user.id);
+                                            }
+                                            let name = g.name.lines().join("").trim().to_string();
+                                            self.tx
+                                                .send(ClientProtocol::CreateConversation {
+                                                    users: g.added.clone(),
+                                                    name: if name.is_empty() {
+                                                        None
+                                                    } else {
+                                                        Some(name)
+                                                    },
+                                                })
+                                                .await?;
+                                            self.popup = None;
+                                        }
                                     } else if g.focus == NewGroupFocus::Search
                                         && let Some(sel) = g.selection
                                     {

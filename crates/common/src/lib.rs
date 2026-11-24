@@ -225,7 +225,7 @@ pub enum ServerProtocol {
         timestamp: DateTime<Utc>,
     },
     ConversationCreated {
-        conversation_id: Uuid,
+        conversation: Conversation,
         timestamp: DateTime<Utc>,
     },
     NewMessage {

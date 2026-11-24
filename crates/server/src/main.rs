@@ -123,7 +123,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                                             match db::conversations::create_conversation(&state.db, users, name).await {
                                                 Ok(conv) => {
                                                     println!("Conversation created: {:?}", conv);
-                                                    socket.send(Message::Text(ServerProtocol::ConversationCreated { conversation_id: conv.id, timestamp: chrono::Utc::now() }.to_json().unwrap_or("".into()).into())).await.unwrap_or_else(|e| {
+                                                    socket.send(Message::Text(ServerProtocol::ConversationCreated { conversation: conv, timestamp: chrono::Utc::now() }.to_json().unwrap_or("".into()).into())).await.unwrap_or_else(|e| {
                                                         eprintln!("Error sending conversation created message to client: {:?}", e);
                                                     });
                                                 }
