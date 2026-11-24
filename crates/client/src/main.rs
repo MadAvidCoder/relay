@@ -12,7 +12,7 @@ use ratatui::{
         Block, Borders, Clear, Padding, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
     },
 };
-use ratatui_textarea::TextArea;
+use ratatui_textarea::{Key, TextArea};
 use relay_common::{ClientProtocol, Conversation, ServerProtocol, User};
 use relay_common::{Message, MessageCursor};
 use sqlx::SqlitePool;
@@ -132,13 +132,14 @@ impl Command {
                     ]),
                 ));
                 search.set_cursor_style(Style::default());
+                let all: Vec<Uuid> = app.contacts.iter().map(|a| a.id).collect();
                 app.popup = Some(Popup::NewGroup(NewGroupPopup {
                     name,
+                    selection: all.first().copied(),
                     search,
-                    results: Vec::new(),
+                    results: all,
                     added: Vec::new(),
                     focus: NewGroupFocus::Name,
-                    selection: None,
                     scroll: ScrollbarState::new(0).viewport_content_length(10),
                 }));
                 Ok(())
@@ -198,7 +199,7 @@ enum NewGroupFocus {
 struct NewGroupPopup {
     name: Box<TextArea<'static>>,
     search: Box<TextArea<'static>>,
-    results: Vec<User>,
+    results: Vec<Uuid>,
     added: Vec<Uuid>,
     focus: NewGroupFocus,
     selection: Option<Uuid>,
@@ -217,6 +218,7 @@ struct App {
     conversations: Vec<Conversation>,
     connection_status: ConnectionStatus,
     messages: HashMap<Uuid, Vec<Message>>,
+    contacts: Vec<User>,
     db: SqlitePool,
     input_mode: InputModes,
     tx: mpsc::Sender<ClientProtocol>,
@@ -225,23 +227,22 @@ struct App {
     popup: Option<Popup>,
 }
 impl App {
-    fn new(
+    async fn new(
         rx: mpsc::Receiver<InboundMessage>,
         tx: mpsc::Sender<ClientProtocol>,
         db: SqlitePool,
-    ) -> Self {
+    ) -> Result<Self> {
         let mut username = Box::new(TextArea::default());
         username.set_cursor_line_style(Style::default());
         username.set_block(Block::default().borders(Borders::ALL).title("  Username  "));
         let mut password = Box::new(TextArea::default());
         password.set_cursor_line_style(Style::default());
         password.set_block(Block::default().borders(Borders::ALL).title("  Password  "));
-        Self {
+        Ok(Self {
             running: true,
             popup: None,
             rx,
             tx,
-            db,
             input_mode: InputModes::Drafting,
             messages: HashMap::new(),
             conversations: Vec::new(),
@@ -251,7 +252,9 @@ impl App {
                 password,
                 active: LoginFields::Username,
             },
-        }
+            contacts: local_db::get_contacts(&db).await?,
+            db,
+        })
     }
 
     async fn run(&mut self) -> Result<()> {
@@ -431,6 +434,29 @@ impl App {
         Ok(())
     }
 
+    fn search_users(users: &[User], query: &str, thresh: f64) -> Vec<Uuid> {
+        let query = query.to_lowercase();
+        let query = query.trim();
+
+        if query.is_empty() {
+            return users.iter().map(|u| u.id).collect();
+        }
+
+        let mut scored: Vec<_> = users
+            .iter()
+            .map(|u| {
+                let display_score =
+                    strsim::jaro_winkler(&u.display_name.to_string().to_lowercase(), query);
+                let name_score =
+                    strsim::jaro_winkler(&u.username.to_string().to_lowercase(), query);
+                (u, display_score.max(name_score))
+            })
+            .filter(|(_, score)| *score >= thresh)
+            .collect();
+        scored.sort_by(|a, b| b.1.total_cmp(&a.1));
+        scored.into_iter().map(|(com, _)| com.id).collect()
+    }
+
     async fn handle_event(&mut self, event: Event) -> Result<()> {
         if let Event::Key(key) = event
             && key.is_press()
@@ -570,7 +596,7 @@ impl App {
                                             }))
                                         });
                                     }
-                                } // Exec command
+                                }
                                 KeyCode::Tab => {} // nothing
                                 _ => {
                                     p.text.input(event);
@@ -600,13 +626,13 @@ impl App {
                                             .get(
                                                 g.results
                                                     .iter()
-                                                    .position(|a| a.id == sel)
+                                                    .position(|a| *a == sel)
                                                     .unwrap_or(0)
                                                     .saturating_sub(1),
                                             )
-                                            .map(|found| found.id);
+                                            .copied();
                                     } else {
-                                        g.selection = g.results.first().map(|found| found.id);
+                                        g.selection = g.results.first().copied();
                                     }
                                 }
                                 KeyCode::Down => {
@@ -617,22 +643,27 @@ impl App {
                                                 .get(
                                                     g.results
                                                         .iter()
-                                                        .position(|a| a.id == sel)
+                                                        .position(|a| *a == sel)
                                                         .unwrap_or(0)
                                                         .saturating_add(1)
                                                         .min(g.results.len().saturating_sub(1)),
                                                 )
-                                                .map(|found| found.id);
+                                                .copied();
                                         } else {
-                                            g.selection = g.results.first().map(|found| found.id);
+                                            g.selection = g.results.first().copied();
                                         }
-                                    } else if g.focus == NewGroupFocus::Name {
-                                        g.focus = NewGroupFocus::Search;
                                     }
                                 }
                                 KeyCode::Enter => {
-
-                                    // TBA create
+                                    if k.modifiers.contains(KeyModifiers::CONTROL) {
+                                        // TODO: Add conv
+                                    } else if g.focus == NewGroupFocus::Name {
+                                        g.focus = NewGroupFocus::Search
+                                    } else {
+                                        if let Some(sel) = g.selection {
+                                            g.added.push(sel);
+                                        }
+                                    }
                                 }
                                 KeyCode::Tab | KeyCode::BackTab => {
                                     g.focus = match g.focus {
@@ -652,22 +683,17 @@ impl App {
                                         }
                                     }
                                 }
-                                KeyCode::Char(' ') => {
-                                    if g.focus == NewGroupFocus::Name {
-                                        g.name.input(event);
-                                    } else {
-                                        if let Some(sel) = g.selection {
-                                            g.added.push(sel);
-                                        }
-                                    }
-                                }
                                 _ => match g.focus {
                                     NewGroupFocus::Name => {
                                         g.name.input(event);
                                     }
                                     NewGroupFocus::Search => {
                                         g.search.input(event);
-                                        // TODO: add searching
+                                        g.results = Self::search_users(
+                                            &self.contacts,
+                                            &g.search.lines().join(""),
+                                            0.65,
+                                        );
                                     }
                                 },
                             };
@@ -849,15 +875,15 @@ impl App {
         frame.render_widget(Paragraph::new(username).centered(), area);
     }
 
-    fn draw_popup(frame: &mut Frame, pop: &mut Popup) {
+    fn draw_popup(frame: &mut Frame, pop: &mut Popup, contacts: &[User]) {
         match pop {
             Popup::Info(i) => Self::draw_info(frame, i),
             Popup::CommandPalette(c) => Self::draw_palette(frame, c),
-            Popup::NewGroup(g) => Self::draw_new_group(frame, g),
+            Popup::NewGroup(g) => Self::draw_new_group(frame, g, contacts),
         }
     }
 
-    fn draw_new_group(frame: &mut Frame, g: &mut NewGroupPopup) {
+    fn draw_new_group(frame: &mut Frame, g: &mut NewGroupPopup, contacts: &[User]) {
         let area = frame.area().centered(POPUP_SIZE.0, POPUP_SIZE.1);
         frame.render_widget(Clear, area);
         let block = Block::default()
@@ -897,7 +923,7 @@ impl App {
             )
             .viewport_content_length(res_chunks[2].height as usize);
         if let Some(sel) = g.selection
-            && let Some(pos) = g.results.iter().position(|a| a.id == sel)
+            && let Some(pos) = g.results.iter().position(|a| *a == sel)
         {
             if pos < g.scroll.get_position() {
                 g.scroll = g.scroll.position(pos);
@@ -965,20 +991,33 @@ impl App {
             Paragraph::new(
                 g.results
                     .iter()
-                    .map(|user| {
-                        Line::from(vec![
-                            Span::from(user.display_name.clone()),
-                            Span::from(" | "),
-                            Span::from(user.username.clone()).dim().italic(),
-                        ])
-                        .style(
-                            if let Some(sel) = g.selection
-                                && user.id == sel
-                            {
-                                Style::new().bold().fg(Color::Cyan)
+                    .filter_map(|uid| {
+                        let user = contacts.iter().find(|c| c.id == *uid)?;
+                        Some(
+                            Line::from(if !user.display_name.trim().is_empty() {
+                                vec![
+                                    Span::from(user.display_name.clone()),
+                                    Span::from(" | "),
+                                    Span::from(format!("@{} ", user.username.clone()))
+                                        .dim()
+                                        .italic(),
+                                ]
                             } else {
-                                Style::new()
-                            },
+                                vec![
+                                    Span::from(format!("@{} ", user.username.clone()))
+                                        .dim()
+                                        .italic(),
+                                ]
+                            })
+                            .style(
+                                if let Some(sel) = g.selection
+                                    && user.id == sel
+                                {
+                                    Style::new().bold().fg(Color::Cyan)
+                                } else {
+                                    Style::new()
+                                },
+                            ),
                         )
                     })
                     .collect::<Vec<Line>>(),
@@ -1255,7 +1294,7 @@ impl App {
             }
         }
         if let Some(pop) = &mut self.popup {
-            Self::draw_popup(frame, pop);
+            Self::draw_popup(frame, pop, &self.contacts);
         }
     }
 }
@@ -1266,7 +1305,7 @@ async fn main() -> Result<()> {
     let (outbound_tx, mut outbound_rx) = mpsc::channel::<ClientProtocol>(100);
     let (inbound_tx, inbound_rx) = mpsc::channel::<InboundMessage>(100);
 
-    let mut app = App::new(inbound_rx, outbound_tx, db);
+    let mut app = App::new(inbound_rx, outbound_tx, db).await?;
 
     let websocket_task: tokio::task::JoinHandle<Result<(), Error>> = tokio::spawn(async move {
         inbound_tx
