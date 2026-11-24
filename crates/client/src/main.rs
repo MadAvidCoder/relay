@@ -995,22 +995,27 @@ impl App {
             Paragraph::new(
                 messages
                     .iter()
-                    .flat_map(|f| {
+                    .flat_map(|mes| {
                         let sender = contacts
                             .iter()
-                            .find(|x| x.id == f.id)
-                            .map(|f| {
-                                if f.display_name.trim().is_empty() {
-                                    f.username.clone()
+                            .find(|user| user.id == mes.id)
+                            .map(|user_id| {
+                                let display = user_id.display_name.trim();
+                                if display.is_empty() {
+                                    user_id.username.as_str()
                                 } else {
-                                    f.display_name.clone()
+                                    display
                                 }
                             })
-                            .unwrap_or("Unknown".to_string());
-                        [
-                            Line::from(f.content.clone()).left_aligned(),
-                            Line::from(sender.clone()).italic().dim().right_aligned(),
-                        ]
+                            .unwrap_or("Unknown");
+                        let mut lines: Vec<Line> = mes
+                            .content
+                            .lines()
+                            .map(|l| Line::from(l).left_aligned())
+                            .collect();
+
+                        lines.push(Line::from(sender).italic().dim().right_aligned());
+                        lines
                     })
                     .collect::<Vec<Line>>(),
             )
