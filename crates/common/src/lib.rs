@@ -138,6 +138,7 @@ pub enum ClientProtocol {
     CreateConversation {
         users: Vec<Uuid>,
         name: Option<String>,
+        mode: ConversationType,
     },
     GetConversations,
     GetMessages {

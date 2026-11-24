@@ -13,7 +13,7 @@ use ratatui::{
     },
 };
 use ratatui_textarea::TextArea;
-use relay_common::{ClientProtocol, Conversation, ServerProtocol, User};
+use relay_common::{ClientProtocol, Conversation, ConversationType, ServerProtocol, User};
 use relay_common::{Message, MessageCursor};
 use sqlx::SqlitePool;
 use std::{
@@ -86,6 +86,7 @@ enum Screens {
         user: User,
         focus: FocusPoints,
         selected_conv: Option<Uuid>,
+        active_conv: Option<Uuid>,
         scroll: ScrollbarState,
         conv_height: usize,
     },
@@ -320,6 +321,7 @@ impl App {
                     draft: t,
                     user,
                     selected_conv: self.conversations.first().map(|a| a.id),
+                    active_conv: self.conversations.first().map(|a| a.id),
                     scroll: ScrollbarState::new(0),
                     focus: FocusPoints::Conversations,
                     conv_height: 16,
@@ -363,8 +365,14 @@ impl App {
                         Vec::new()
                     },
                 );
-                if let Screens::Main { selected_conv, .. } = &mut self.screen {
+                if let Screens::Main {
+                    selected_conv,
+                    active_conv,
+                    ..
+                } = &mut self.screen
+                {
                     *selected_conv = Some(conversation.id);
+                    *active_conv = *selected_conv
                 }
                 self.conversations.push(conversation);
             }
@@ -434,10 +442,15 @@ impl App {
                         })
                         .await?;
                 }
-                if let Screens::Main { selected_conv, .. } = &mut self.screen
-                    && selected_conv.is_none()
+                if let Screens::Main {
+                    selected_conv,
+                    active_conv,
+                    ..
+                } = &mut self.screen
+                    && active_conv.is_none()
                 {
                     *selected_conv = self.conversations.first().map(|c| c.id);
+                    *active_conv = *selected_conv;
                 }
             }
             ServerProtocol::MessageHistory {
@@ -550,6 +563,7 @@ impl App {
                 draft,
                 user,
                 selected_conv,
+                active_conv,
                 focus,
                 scroll,
                 conv_height,
@@ -702,6 +716,7 @@ impl App {
                                                     } else {
                                                         Some(name)
                                                     },
+                                                    mode: ConversationType::Group,
                                                 })
                                                 .await?;
                                             self.popup = None;
@@ -752,6 +767,25 @@ impl App {
                     }
                 } else if let Event::Key(k) = event
                     && k.is_press()
+                    && k.code == KeyCode::Enter
+                {
+                    match *focus {
+                        FocusPoints::Conversations => {
+                            *active_conv = *selected_conv;
+                        }
+                        FocusPoints::Draft => {
+                            if k.modifiers.contains(KeyModifiers::CONTROL) {
+                                // TODO: Send
+                            } else {
+                                draft.input(event);
+                            }
+                        }
+                        FocusPoints::Messages => {
+                            // prob nothing for now
+                        }
+                    }
+                } else if let Event::Key(k) = event
+                    && k.is_press()
                     && k.code == KeyCode::Tab
                 {
                     *focus = focus.next();
@@ -776,10 +810,8 @@ impl App {
                             MouseEventKind::ScrollUp => {
                                 scroll.prev();
                                 scroll.prev();
-                                scroll.prev();
                             }
                             MouseEventKind::ScrollDown => {
-                                scroll.next();
                                 scroll.next();
                                 scroll.next();
                             }
@@ -872,6 +904,7 @@ impl App {
         focused: bool,
         conversations: &[Conversation],
         sel: &Option<Uuid>,
+        active: &Option<Uuid>,
         bar: &mut ScrollbarState,
         conv_height: &mut usize,
     ) {
@@ -906,9 +939,17 @@ impl App {
                         Line::from(conv.name.as_deref().unwrap_or("")).style(
                             Style::default().bold().fg(
                                 if let Some(sel) = sel
-                                    && &conv.id == sel
+                                    && let Some(active) = active
                                 {
-                                    Color::Cyan
+                                    if &conv.id == sel && &conv.id == active {
+                                        Color::Green
+                                    } else if &conv.id == active {
+                                        Color::LightGreen
+                                    } else if &conv.id == sel {
+                                        Color::Cyan
+                                    } else {
+                                        Color::Reset
+                                    }
                                 } else {
                                     Color::Reset
                                 },
@@ -1266,6 +1307,7 @@ impl App {
                 user,
                 focus,
                 selected_conv,
+                active_conv,
                 scroll,
                 conv_height,
             } => {
@@ -1292,6 +1334,7 @@ impl App {
                     *focus == FocusPoints::Conversations,
                     self.conversations.as_ref(),
                     selected_conv,
+                    active_conv,
                     scroll,
                     conv_height,
                 );

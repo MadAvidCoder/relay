@@ -105,7 +105,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                                                 }
                                             }
                                         }
-                                        ClientProtocol::CreateConversation { users, name } => {
+                                        ClientProtocol::CreateConversation { users, name, mode } => {
                                             if user_id.is_none() {
                                                 eprintln!("User is not authenticated. Cannot send message.");
                                                 socket.send(Message::Text(ServerProtocol::Error {code: ErrorCodes::NotAuthenticated, timestamp: chrono::Utc::now()}.to_json().unwrap_or("".into()).into())).await.unwrap_or_else(|e| {
@@ -120,7 +120,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                                                 });
                                                 continue;
                                             }
-                                            match db::conversations::create_conversation(&state.db, users, name).await {
+                                            match db::conversations::create_conversation(&state.db, users, name, mode).await {
                                                 Ok(conv) => {
                                                     println!("Conversation created: {:?}", conv);
                                                     socket.send(Message::Text(ServerProtocol::ConversationCreated { conversation: conv, timestamp: chrono::Utc::now() }.to_json().unwrap_or("".into()).into())).await.unwrap_or_else(|e| {

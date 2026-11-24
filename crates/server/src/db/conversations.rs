@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use relay_common::{Conversation, Message, User};
+use relay_common::{Conversation, ConversationType, Message, User};
 use sqlx::{Error, PgPool};
 use uuid::Uuid;
 
@@ -8,15 +8,16 @@ pub async fn create_conversation(
     pool: &PgPool,
     users: Vec<Uuid>,
     name: Option<String>,
+    mode: ConversationType,
 ) -> Result<Conversation, Error> {
     let id = Uuid::now_v7();
     let conv = sqlx::query!(
         "INSERT INTO conversations (id, type, name) VALUES ($1, $2, $3) RETURNING id, type AS \"conversation_type: relay_common::ConversationType\", name, created_at",
         id,
-        if users.len() == 2 {
-            relay_common::ConversationType::DM
+        if users.len() > 2 {
+            ConversationType::Group
         } else {
-            relay_common::ConversationType::Group
+            mode
         } as _,
         name,
     )
