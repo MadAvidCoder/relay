@@ -295,6 +295,7 @@ impl App {
             ServerProtocol::AuthSuccess { user, timestamp: _ } => {
                 let mut t = Box::new(TextArea::default());
                 t.set_cursor_line_style(Style::default());
+                t.set_cursor_style(Style::default());
                 t.set_block(
                     Block::default()
                         .borders(Borders::ALL)
@@ -504,6 +505,7 @@ impl App {
                     } else {
                         let mut t = Box::new(TextArea::default());
                         t.set_cursor_line_style(Style::default());
+                        t.set_cursor_style(Style::default().reversed().slow_blink());
                         t.set_block(Block::default().borders(Borders::BOTTOM));
                         let all = Command::all();
                         self.popup = Some(Popup::CommandPalette(PalettePopup {
@@ -676,11 +678,21 @@ impl App {
                     && k.code == KeyCode::Tab
                 {
                     *focus = focus.next();
+                    if *focus == FocusPoints::Draft {
+                        draft.set_cursor_style(Style::default().reversed().slow_blink());
+                    } else {
+                        draft.set_cursor_style(Style::default());
+                    }
                 } else if let Event::Key(k) = event
                     && k.is_press()
                     && k.code == KeyCode::BackTab
                 {
                     *focus = focus.prev();
+                    if *focus == FocusPoints::Draft {
+                        draft.set_cursor_style(Style::default().reversed().slow_blink());
+                    } else {
+                        draft.set_cursor_style(Style::default());
+                    }
                 } else if let Event::Mouse(e) = event {
                     match e.kind {
                         MouseEventKind::ScrollUp => {
@@ -1100,7 +1112,7 @@ impl App {
         );
         frame.render_widget(
             Paragraph::new("%: Search | Enter: select | ↑/↓: navigate | Esc: close")
-                .style(Style::default().italic().gray())
+                .style(Style::default().italic().gray().dim())
                 .block(Block::default().borders(Borders::TOP))
                 .centered(),
             chunks[2],
@@ -1213,7 +1225,7 @@ impl App {
                 } else {
                     Style::default()
                 });
-                password.set_mask_char('\u{2022}');
+                password.set_mask_char('*');
                 password.set_block(
                     Block::default()
                         .title("  Password  ")
@@ -1232,7 +1244,7 @@ impl App {
                         Span::from(": Switch field  |  "),
                         Span::styled("ENTER", Style::default().bold()),
                         Span::from(": Login  |  "),
-                        Span::styled("ESC", Style::default().bold()),
+                        Span::styled("CTRL+C", Style::default().bold()),
                         Span::from(": Quit"),
                     ]))
                     .centered()
