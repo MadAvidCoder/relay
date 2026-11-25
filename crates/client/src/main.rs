@@ -108,10 +108,28 @@ impl Command {
     fn execute(&self, app: &mut App) -> Result<()> {
         match self {
             Command::NewDM => {
-                app.popup = Some(Popup::Info(InfoPopup {
-                    title: "New DM".to_string(),
-                    message: "TBA".to_string(),
-                    colour: Color::Green,
+                let mut search = Box::new(TextArea::default());
+                search.set_cursor_line_style(Style::default());
+                search.set_block(
+                    Block::default()
+                        .borders(Borders::BOTTOM)
+                        .title_bottom(Line::from(vec![
+                            "── Search Users ".into(),
+                            "(Enter to add) ".italic().dim(),
+                        ]))
+                        .title_bottom(
+                            Line::from(vec![Span::from(" 0 selected "), Span::from("─")])
+                                .right_aligned(),
+                        ),
+                );
+
+                search.set_cursor_style(Style::default().slow_blink().reversed());
+                let all: Vec<Uuid> = app.contacts.iter().map(|a| a.id).collect();
+                app.popup = Some(Popup::NewDM(NewDMPopup {
+                    search,
+                    selection: all.first().copied(),
+                    results: all,
+                    scroll: ScrollbarState::new(0),
                 }));
                 Ok(())
             }
@@ -216,10 +234,19 @@ struct NewGroupPopup {
     selection: Option<Uuid>,
     scroll: ScrollbarState,
 }
+
+struct NewDMPopup {
+    search: Box<TextArea<'static>>,
+    results: Vec<Uuid>,
+    selection: Option<Uuid>,
+    scroll: ScrollbarState,
+}
+
 enum Popup {
     Info(InfoPopup),
     CommandPalette(PalettePopup),
     NewGroup(NewGroupPopup),
+    NewDM(NewDMPopup),
 }
 
 const POPUP_SIZE: (Constraint, Constraint) = (Constraint::Percentage(50), Constraint::Length(12));
@@ -765,6 +792,73 @@ impl App {
                             };
                         }
                     }
+                } else if let Some(Popup::NewDM(d)) = &mut self.popup {
+                    if let Event::Key(k) = event
+                        && k.is_press()
+                        && k.code == KeyCode::Esc
+                    {
+                        self.popup = None;
+                    } else {
+                        if let Event::Key(k) = event
+                            && k.is_press()
+                        {
+                            match k.code {
+                                KeyCode::Up => {
+                                    if let Some(sel) = d.selection {
+                                        d.selection = d
+                                            .results
+                                            .get(
+                                                d.results
+                                                    .iter()
+                                                    .position(|a| *a == sel)
+                                                    .unwrap_or(0)
+                                                    .saturating_sub(1),
+                                            )
+                                            .copied();
+                                    } else {
+                                        d.selection = d.results.first().copied();
+                                    }
+                                }
+                                KeyCode::Down => {
+                                    if let Some(sel) = d.selection {
+                                        d.selection = d
+                                            .results
+                                            .get(
+                                                d.results
+                                                    .iter()
+                                                    .position(|a| *a == sel)
+                                                    .unwrap_or(0)
+                                                    .saturating_add(1)
+                                                    .min(d.results.len().saturating_sub(1)),
+                                            )
+                                            .copied();
+                                    } else {
+                                        d.selection = d.results.first().copied();
+                                    }
+                                }
+                                KeyCode::Enter => {
+                                    if let Some(sel) = d.selection {
+                                        self.tx
+                                            .send(ClientProtocol::CreateConversation {
+                                                users: vec![sel, user.id],
+                                                name: None,
+                                                mode: ConversationType::DM,
+                                            })
+                                            .await?;
+                                        self.popup = None;
+                                    }
+                                }
+                                _ => {
+                                    d.search.input(event);
+                                    d.results = Self::search_users(
+                                        &self.contacts,
+                                        &d.search.lines().join(""),
+                                        0.65,
+                                    );
+                                }
+                            };
+                        }
+                    }
                 } else if let Event::Key(k) = event
                     && k.is_press()
                     && k.code == KeyCode::Enter
@@ -859,10 +953,11 @@ impl App {
                     if let Some(sel) = selected_conv
                         && let Some(pos) = self.conversations.iter().position(|a| a.id == *sel)
                     {
-                        if pos < scroll.get_position() {
-                            *scroll = scroll.position(pos);
-                        } else if pos >= scroll.get_position() + *conv_height {
-                            *scroll = scroll.position(pos - *conv_height + 1);
+                        let row_pos = pos * 3;
+                        if row_pos < scroll.get_position() {
+                            *scroll = scroll.position(row_pos);
+                        } else if row_pos >= scroll.get_position() + *conv_height {
+                            *scroll = scroll.position(row_pos - *conv_height + 1);
                         }
                     };
                 } else if let Event::Key(k) = event
@@ -892,10 +987,11 @@ impl App {
                     if let Some(sel) = selected_conv
                         && let Some(pos) = self.conversations.iter().position(|a| a.id == *sel)
                     {
-                        if pos < scroll.get_position() {
-                            *scroll = scroll.position(pos);
-                        } else if pos >= scroll.get_position() + *conv_height {
-                            *scroll = scroll.position(pos - *conv_height + 1);
+                        let row_pos = pos * 3;
+                        if row_pos < scroll.get_position() {
+                            *scroll = scroll.position(row_pos);
+                        } else if row_pos >= scroll.get_position() + *conv_height {
+                            *scroll = scroll.position(row_pos - *conv_height + 1);
                         }
                     };
                 } else if self.input_mode == InputModes::Drafting && *focus == FocusPoints::Draft {
@@ -913,6 +1009,7 @@ impl App {
         frame: &mut Frame,
         area: Rect,
         focused: bool,
+        user: Uuid,
         conversations: &[Conversation],
         sel: &Option<Uuid>,
         active: &Option<Uuid>,
@@ -931,12 +1028,14 @@ impl App {
 
         *bar = bar.position(
             bar.get_position()
-                .min(conversations.len().saturating_sub(content_height)),
+                .min((conversations.len() * 3).saturating_sub(content_height)),
         );
 
-        *bar = bar
-            .viewport_content_length(content_height)
-            .content_length(conversations.len().saturating_sub(content_height).max(1));
+        *bar = bar.viewport_content_length(content_height).content_length(
+            (conversations.len() * 3)
+                .saturating_sub(content_height)
+                .max(1),
+        );
         frame.render_stateful_widget(
             Scrollbar::new(ScrollbarOrientation::VerticalLeft),
             scrollbar_area,
@@ -946,26 +1045,130 @@ impl App {
             Paragraph::new(
                 conversations
                     .iter()
-                    .map(|conv| {
-                        Line::from(conv.name.as_deref().unwrap_or("")).style(
-                            Style::default().bold().fg(
-                                if let Some(sel) = sel
-                                    && let Some(active) = active
-                                {
-                                    if &conv.id == sel && &conv.id == active {
-                                        Color::Green
-                                    } else if &conv.id == active {
-                                        Color::LightGreen
-                                    } else if &conv.id == sel {
-                                        Color::Cyan
-                                    } else {
-                                        Color::Reset
-                                    }
+                    .flat_map(|conv| match conv.conversation_type {
+                        ConversationType::DM => {
+                            let cur_us_pos = conv.users.iter().position(|p| p.id == user);
+                            let user = if let Some(pos) = cur_us_pos {
+                                conv.users.get(match pos {
+                                    0 => 1,
+                                    1 => 0,
+                                    _ => 0,
+                                })
+                            } else {
+                                conv.users.first()
+                            };
+                            let display = user
+                                .map(|f| f.display_name.clone())
+                                .unwrap_or(String::new());
+                            let username = format!(
+                                "@{}",
+                                user.map(|f| f.username.clone()).unwrap_or(String::new())
+                            );
+                            let color = if let Some(sel) = sel
+                                && let Some(active) = active
+                            {
+                                if &conv.id == sel && &conv.id == active {
+                                    Color::Green
+                                } else if &conv.id == active {
+                                    Color::LightGreen
+                                } else if &conv.id == sel {
+                                    Color::Cyan
                                 } else {
                                     Color::Reset
-                                },
-                            ),
-                        )
+                                }
+                            } else {
+                                Color::Reset
+                            };
+
+                            if display.is_empty() {
+                                [
+                                    Line::from(username).style(Style::default().italic().fg(color)),
+                                    Line::from(""),
+                                    Line::from(""),
+                                ]
+                            } else {
+                                [
+                                    Line::from(display).style(Style::default().bold().fg(color)),
+                                    Line::from(format!(" {}", username))
+                                        .style(Style::default().italic().dim().fg(color)),
+                                    Line::from(""),
+                                ]
+                            }
+                        }
+                        ConversationType::Group => {
+                            let color = if let Some(sel) = sel
+                                && let Some(active) = active
+                            {
+                                if &conv.id == sel && &conv.id == active {
+                                    Color::Green
+                                } else if &conv.id == active {
+                                    Color::LightGreen
+                                } else if &conv.id == sel {
+                                    Color::Cyan
+                                } else {
+                                    Color::Reset
+                                }
+                            } else {
+                                Color::Reset
+                            };
+
+                            if let Some(name) = conv.name.clone() {
+                                [
+                                    Line::from(name).style(Style::default().bold().fg(color)),
+                                    Line::from(format!(" ({} members)", conv.users.len()))
+                                        .dim()
+                                        .italic(),
+                                    Line::from(""),
+                                ]
+                            } else {
+                                let cur_us_pos = conv.users.iter().position(|p| p.id == user);
+                                let users = if let Some(pos) = cur_us_pos {
+                                    let mut all_users = conv.users.clone();
+                                    all_users.remove(pos);
+                                    all_users
+                                } else {
+                                    conv.users.clone()
+                                };
+                                let name = if users.len() > 2 {
+                                    format!(
+                                        "{} +{}",
+                                        users[..2]
+                                            .iter()
+                                            .map(|u| {
+                                                let d = u.display_name.trim();
+                                                if d.is_empty() {
+                                                    format!("@{}", u.username)
+                                                } else {
+                                                    d.to_string()
+                                                }
+                                            })
+                                            .collect::<Vec<_>>()
+                                            .join(", "),
+                                        users.len() + 1
+                                    )
+                                } else {
+                                    users
+                                        .iter()
+                                        .map(|u| {
+                                            let d = u.display_name.trim();
+                                            if d.is_empty() {
+                                                format!("@{}", u.username)
+                                            } else {
+                                                d.to_string()
+                                            }
+                                        })
+                                        .collect::<Vec<_>>()
+                                        .join(", ")
+                                };
+                                [
+                                    Line::from(name).style(Style::default().bold().fg(color)),
+                                    Line::from(format!(" ({} members)", conv.users.len()))
+                                        .dim()
+                                        .italic(),
+                                    Line::from(""),
+                                ]
+                            }
+                        }
                     })
                     .collect::<Vec<Line>>(),
             )
@@ -1057,6 +1260,7 @@ impl App {
             Popup::Info(i) => Self::draw_info(frame, i),
             Popup::CommandPalette(c) => Self::draw_palette(frame, c),
             Popup::NewGroup(g) => Self::draw_new_group(frame, g, contacts),
+            Popup::NewDM(d) => Self::draw_new_dm(frame, d, contacts),
         }
     }
 
@@ -1220,6 +1424,127 @@ impl App {
         );
     }
 
+    fn draw_new_dm(frame: &mut Frame, d: &mut NewDMPopup, contacts: &[User]) {
+        let area = frame.area().centered(POPUP_SIZE.0, POPUP_SIZE.1);
+        frame.render_widget(Clear, area);
+        let block = Block::default()
+            .title(" New Group ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Yellow))
+            .style(Style::default().bg(Color::Black));
+        frame.render_widget(&block, area);
+
+        let inner = block.inner(area);
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(2),
+                Constraint::Fill(1),
+                Constraint::Length(2),
+            ])
+            .split(inner);
+
+        let res_chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Fill(1),
+            ])
+            .split(chunks[1]);
+        if d.selection.is_none_or(|sel| !d.results.contains(&sel)) {
+            d.selection = d.results.first().copied();
+        }
+
+        d.scroll = d
+            .scroll
+            .content_length(
+                d.results
+                    .len()
+                    .saturating_sub(res_chunks[2].height as usize)
+                    .max(1),
+            )
+            .viewport_content_length(res_chunks[2].height as usize);
+        if let Some(sel) = d.selection
+            && let Some(pos) = d.results.iter().position(|a| *a == sel)
+        {
+            if pos < d.scroll.get_position() {
+                d.scroll = d.scroll.position(pos);
+            } else if pos >= d.scroll.get_position() + (res_chunks[2].height as usize) {
+                d.scroll = d.scroll.position(pos - (res_chunks[2].height as usize) + 1);
+            }
+        };
+        d.scroll = d.scroll.position(
+            d.scroll.get_position().min(
+                d.results
+                    .len()
+                    .saturating_sub((res_chunks[2].height) as usize),
+            ),
+        );
+
+        frame.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalLeft)
+                .begin_symbol(None)
+                .end_symbol(None),
+            res_chunks[0],
+            &mut d.scroll,
+        );
+
+        d.search.set_block(
+            Block::default()
+                .borders(Borders::BOTTOM)
+                .title_bottom(Line::from(vec![
+                    "── Search Users ".into(),
+                    "(Enter to create) ".italic().dim(),
+                ]))
+                .border_style(Style::new().cyan()),
+        );
+
+        frame.render_widget(&*d.search, chunks[0]);
+
+        frame.render_widget(
+            Paragraph::new(
+                d.results
+                    .iter()
+                    .filter_map(|uid| {
+                        let user = contacts.iter().find(|c| c.id == *uid)?;
+                        Some(
+                            Line::from(if !user.display_name.trim().is_empty() {
+                                vec![
+                                    Span::from(user.display_name.clone()),
+                                    Span::from(" "),
+                                    Span::from(format!("@{} ", user.username.clone()))
+                                        .dim()
+                                        .italic(),
+                                ]
+                            } else {
+                                vec![Span::from(format!("@{} ", user.username.clone())).italic()]
+                            })
+                            .style(
+                                if let Some(sel) = d.selection
+                                    && user.id == sel
+                                {
+                                    Style::new().bold().fg(Color::Cyan)
+                                } else {
+                                    Style::new()
+                                },
+                            ),
+                        )
+                    })
+                    .collect::<Vec<Line>>(),
+            )
+            .scroll((d.scroll.get_position() as u16, 0)),
+            res_chunks[2],
+        );
+        frame.render_widget(
+            Paragraph::new("↑/↓: select | Enter: confirm |  Esc: cancel")
+                .style(Style::default().italic().gray().dim())
+                .block(Block::default().borders(Borders::TOP))
+                .centered(),
+            chunks[2],
+        );
+    }
+
     fn draw_info(frame: &mut Frame, pop: &InfoPopup) {
         let area = frame.area().centered(POPUP_SIZE.0, POPUP_SIZE.1);
         frame.render_widget(Clear, area);
@@ -1376,6 +1701,7 @@ impl App {
                     frame,
                     l_rows[0],
                     *focus == FocusPoints::Conversations,
+                    user.id,
                     self.conversations.as_ref(),
                     selected_conv,
                     active_conv,
