@@ -1214,10 +1214,10 @@ impl App {
                         let mut lines: Vec<Line> = mes
                             .content
                             .lines()
-                            .map(|l| Line::from(l).left_aligned())
+                            .map(|l| Line::from(format!("│ {}", l)).left_aligned())
                             .collect();
 
-                        lines.push(Line::from(sender).italic().dim().right_aligned());
+                        lines.push(Line::from(format!("     {}", sender)).italic().dim().left_aligned());
                         lines
                     })
                     .collect::<Vec<Line>>(),
